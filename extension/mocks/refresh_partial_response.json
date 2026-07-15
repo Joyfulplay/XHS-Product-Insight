@@ -1,0 +1,11 @@
+{
+  "data": {
+    "job_id": "job_mock_001",
+    "status": "partially_succeeded",
+    "stage": "completed",
+    "progress": 1,
+    "estimated_seconds": 0,
+    "platform_failures": [{ "platform": "xiaohongshu", "reason": "上游平台暂时不可用" }]
+  },
+  "meta": { "schema_version": "1.0", "request_id": "req_mock_refresh_partial" }
+}

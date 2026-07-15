@@ -1,0 +1,52 @@
+{
+  "data": {
+    "analysis_id": "ana_mock_001",
+    "product": {
+      "product_id": "prod_wh1000xm5",
+      "canonical_name": "Sony WH-1000XM5 无线降噪耳机",
+      "brand": "Sony",
+      "model": "WH-1000XM5",
+      "display_image_url": null
+    },
+    "analysis_status": "ready",
+    "data_status": { "mode": "demo", "is_stale": false, "platform_failures": [] },
+    "coverage": { "total_content_count": 1248, "platforms": ["taobao", "xiaohongshu", "bilibili"] },
+    "overview": { "raw_sentiment_score": 86, "trusted_sentiment_score": 79, "confidence": 0.88 },
+    "summaries": {
+      "raw": { "one_sentence_summary": "整体口碑优秀，降噪和音质获得广泛好评，适合通勤与办公。" },
+      "trust_aware": { "one_sentence_summary": "降噪表现可靠、音质均衡，但长时间佩戴舒适度和通话抗风噪评价存在分歧。" },
+      "changed_claims": [
+        { "claim_id": "claim_comfort", "text": "全天佩戴毫无压力", "reason": "该结论主要来自高风险营销式内容，降权后证据不足。" }
+      ]
+    },
+    "platform_comparison": [
+      { "platform": "taobao", "content_count": 968, "raw_sentiment_score": 89, "trusted_sentiment_score": 82, "high_risk_ratio": 0.08 },
+      { "platform": "xiaohongshu", "content_count": 186, "raw_sentiment_score": 84, "trusted_sentiment_score": 75, "high_risk_ratio": 0.19 },
+      { "platform": "bilibili", "content_count": 94, "raw_sentiment_score": 78, "trusted_sentiment_score": 77, "high_risk_ratio": 0.06 }
+    ],
+    "aspects": [
+      { "aspect_code": "noise_cancelling", "aspect_label": "降噪", "mention_count": 637, "raw_sentiment_score": 92, "trusted_sentiment_score": 88, "positive_ratio": 0.82, "neutral_ratio": 0.12, "negative_ratio": 0.06, "platform_disagreement_score": 0.12, "top_claim_ids": ["claim_nc"], "evidence_content_ids": ["ev_1"] },
+      { "aspect_code": "sound_quality", "aspect_label": "音质", "mention_count": 514, "raw_sentiment_score": 86, "trusted_sentiment_score": 81, "positive_ratio": 0.73, "neutral_ratio": 0.18, "negative_ratio": 0.09, "platform_disagreement_score": 0.2, "top_claim_ids": ["claim_sound"], "evidence_content_ids": ["ev_2"] },
+      { "aspect_code": "comfort", "aspect_label": "舒适度", "mention_count": 328, "raw_sentiment_score": 81, "trusted_sentiment_score": 68, "positive_ratio": 0.58, "neutral_ratio": 0.21, "negative_ratio": 0.21, "platform_disagreement_score": 0.62, "top_claim_ids": ["claim_comfort"], "evidence_content_ids": ["ev_3"] },
+      { "aspect_code": "battery", "aspect_label": "续航", "mention_count": 266, "raw_sentiment_score": 88, "trusted_sentiment_score": 85, "positive_ratio": 0.78, "neutral_ratio": 0.17, "negative_ratio": 0.05, "platform_disagreement_score": 0.09, "top_claim_ids": ["claim_battery"], "evidence_content_ids": ["ev_4"] },
+      { "aspect_code": "microphone", "aspect_label": "麦克风", "mention_count": 174, "raw_sentiment_score": 73, "trusted_sentiment_score": 64, "positive_ratio": 0.46, "neutral_ratio": 0.3, "negative_ratio": 0.24, "platform_disagreement_score": 0.48, "top_claim_ids": ["claim_mic"], "evidence_content_ids": ["ev_5"] }
+    ],
+    "risk_summary": {
+      "high_risk_count": 137,
+      "high_risk_ratio": 0.11,
+      "risk_reason_distribution": [
+        { "reason_code": "promotional_language", "reason_label": "营销式表达", "count": 72 },
+        { "reason_code": "duplicate_pattern", "reason_label": "内容模式重复", "count": 41 },
+        { "reason_code": "missing_context", "reason_label": "上下文不足", "count": 24 }
+      ],
+      "display_note": "风险分数表示内容需要谨慎参考，不代表评论一定虚假。"
+    },
+    "top_sources": [
+      { "content_id": "ev_1", "platform": "bilibili", "source_title": "使用 30 天后的真实降噪体验", "source_url": "https://www.bilibili.com/", "publish_time": "2026-06-21T09:30:00+08:00", "relevance_score": 0.96, "risk_score": 0.08 },
+      { "content_id": "ev_2", "platform": "xiaohongshu", "source_title": "通勤耳机横向对比记录", "source_url": "https://www.xiaohongshu.com/", "publish_time": "2026-06-18T14:10:00+08:00", "relevance_score": 0.91, "risk_score": 0.16 },
+      { "content_id": "ev_3", "platform": "taobao", "source_title": "已购用户长期佩戴反馈", "source_url": "https://item.taobao.com/", "publish_time": "2026-06-12T20:05:00+08:00", "relevance_score": 0.87, "risk_score": 0.12 }
+    ],
+    "updated_at": "2026-07-14T10:40:00+08:00"
+  },
+  "meta": { "schema_version": "1.0", "request_id": "req_mock_analysis" }
+}
