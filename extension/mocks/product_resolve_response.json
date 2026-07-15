@@ -1,0 +1,16 @@
+{
+  "data": {
+    "product": {
+      "product_id": "prod_wh1000xm5",
+      "canonical_name": "Sony WH-1000XM5 无线降噪耳机",
+      "brand": "Sony",
+      "model": "WH-1000XM5",
+      "display_image_url": null
+    },
+    "match_status": "matched",
+    "match_confidence": 0.96,
+    "requires_user_confirmation": false,
+    "candidates": []
+  },
+  "meta": { "schema_version": "1.0", "request_id": "req_mock_resolve" }
+}

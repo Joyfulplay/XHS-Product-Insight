@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "TrustLens",
+  "description": "跨平台商品评价可信风险感知分析",
+  "version": "0.1.0",
+  "permissions": ["sidePanel", "activeTab"],
+  "host_permissions": [
+    "https://*.taobao.com/*",
+    "http://localhost:8000/*"
+  ],
+  "background": {
+    "service_worker": "assets/background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://*.taobao.com/*"],
+      "js": ["assets/content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "action": {
+    "default_title": "打开 TrustLens"
+  }
+}

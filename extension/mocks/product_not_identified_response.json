@@ -1,0 +1,4 @@
+{
+  "error": { "code": "PRODUCT_NOT_IDENTIFIED", "message": "无法可靠识别当前商品型号", "details": {}, "retryable": false },
+  "meta": { "schema_version": "1.0", "request_id": "req_mock_unidentified" }
+}
