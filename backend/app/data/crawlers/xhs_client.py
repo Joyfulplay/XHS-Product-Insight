@@ -9,7 +9,7 @@
 关键词和小红书链接不会启动浏览器。只有输入淘宝/天猫链接且没有使用
 ``--query`` 指定搜索词时，才会临时启动 Playwright 读取商品标题。
 
-首次使用前运行 ``python xhs_scraper.py --login``，在终端扫描二维码登录。
+首次使用前运行 ``python xhs_client.py --login``，通过系统 Edge/Chrome 扫码登录。
 脚本只访问当前登录账号正常可见的公开内容，不尝试绕过验证码或平台限制。
 """
 
@@ -21,6 +21,7 @@ import html
 import json
 import re
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -35,6 +36,13 @@ XHS_HOME = "https://www.xiaohongshu.com"
 SCHEMA_VERSION = "1.1"
 SEARCH_PAGE_SIZE = 20
 COMMENT_PAGE_LIMIT = 3
+LOGIN_TIMEOUT_SECONDS = 300
+LOGIN_URL = f"{XHS_HOME}/login"
+REQUIRED_LOGIN_COOKIES = ("a1", "webId", "web_session")
+BROWSER_CHANNELS = {
+    "edge": "msedge",
+    "chrome": "chrome",
+}
 XHS_NOTE_PATH = re.compile(r"/(?:explore|discovery/item|search_result)/([A-Za-z0-9]+)")
 SUPPORTED_PRODUCT_HOSTS = ("taobao.com", "tmall.com")
 PREFERRED_NOTE_KEYWORDS = (
@@ -87,6 +95,12 @@ class ApiRequestError(ScraperError):
     """接口返回了不能进一步分类的错误。"""
 
     code = "API_ERROR"
+
+
+class BrowserNotFoundError(ScraperError):
+    """系统中没有可由 Playwright 启动的 Edge 或 Chrome。"""
+
+    code = "BROWSER_NOT_FOUND"
 
 
 class UnsupportedInputError(ScraperError):
@@ -326,6 +340,12 @@ def translate_client_exception(exc: Exception) -> ScraperError:
         return exc
     name = type(exc).__name__
     message = clean_text(exc) or name
+    response = getattr(exc, "response", None)
+    error_code = getattr(exc, "code", None)
+    if error_code is None and isinstance(response, dict):
+        error_code = response.get("code")
+    if str(error_code) == "-104" or "没有权限访问" in message or '"code": -104' in message:
+        return AuthRequiredError("当前保存的是游客会话或登录已失效，请重新运行 --login")
     if name in {"NoCookieError", "SessionExpiredError"}:
         return AuthRequiredError("小红书登录状态不存在或已过期，请重新运行 --login")
     if name in {"NeedVerifyError", "IpBlockedError"}:
@@ -411,6 +431,7 @@ class XiaohongshuScraper:
         min_comment_likes: int,
         delay: float,
         headless: bool,
+        browser: str = "auto",
     ) -> None:
         self.profile_dir = profile_dir
         self.max_candidates = max_candidates
@@ -420,6 +441,7 @@ class XiaohongshuScraper:
         self.min_comment_likes = min_comment_likes
         self.delay = max(1.0, delay)
         self.headless = headless
+        self.browser = browser
 
     @staticmethod
     def _import_client_components() -> tuple[Any, Callable[[], Any], Callable[[], Path]]:
@@ -435,23 +457,237 @@ class XiaohongshuScraper:
         return XhsClient, load_saved_cookies, get_cookie_path
 
     def login(self) -> Path:
-        """在终端显示二维码，扫码后由 xiaohongshu-cli 保存 Cookie。"""
+        """使用系统 Edge/Chrome 扫码登录，并保存浏览器产生的 Cookie。"""
 
         try:
-            from xhs_cli.cookies import get_cookie_path
-            from xhs_cli.qr_login import qrcode_login
+            from playwright.sync_api import sync_playwright
+            from xhs_cli.cookies import get_cookie_path, save_cookies
         except ImportError as exc:
             raise ScraperError(
-                "缺少 xiaohongshu-cli。请运行：pip install xiaohongshu-cli==0.6.4"
+                "缺少 Playwright 或 xiaohongshu-cli，请先安装爬虫 requirements.txt"
             ) from exc
 
-        try:
-            cookies = qrcode_login(on_status=print, prefer_browser_assisted=False)
-        except Exception as exc:
-            raise translate_client_exception(exc) from exc
-        if not cookies.get("web_session"):
-            raise AuthRequiredError("扫码完成，但没有获得有效的登录会话")
+        with sync_playwright() as playwright:
+            context, browser_name = self._launch_system_browser(playwright, headless=False)
+            try:
+                page = context.pages[0] if context.pages else context.new_page()
+                self._navigate_to_login(page)
+
+                cookies = self._browser_cookies(context)
+                login_prompt_visible = self._has_visible_login_prompt(page)
+                already_logged_in = (
+                    self._has_required_login_cookies(cookies)
+                    and self._has_logged_in_marker(page)
+                    and not login_prompt_visible
+                )
+                if not already_logged_in:
+                    initial_session = cookies.get("web_session", "")
+                    self._open_login_prompt(page)
+                    print(
+                        f"已打开系统 {browser_name.title()}，请使用小红书 App 扫码并在手机上确认登录。"
+                    )
+                    print("登录完成前请不要关闭浏览器，最长等待 5 分钟。")
+                    cookies = self._wait_for_login_cookies(
+                        context,
+                        page,
+                        timeout_seconds=LOGIN_TIMEOUT_SECONDS,
+                        initial_session=initial_session,
+                        prompt_seen=login_prompt_visible,
+                    )
+                else:
+                    print(f"系统 {browser_name.title()} 的独立配置已经登录。")
+
+                # save_cookies 会附加 saved_at；浏览器 Cookie 本身不包含本地元数据。
+                save_cookies(cookies)
+            finally:
+                context.close()
         return get_cookie_path()
+
+    @staticmethod
+    def _navigate_to_login(page: Any) -> None:
+        """进入专用登录页，只等待服务器开始响应，不等待全部前端资源。"""
+
+        try:
+            page.goto(LOGIN_URL, wait_until="commit", timeout=20_000)
+        except Exception as exc:
+            current_url = clean_text(getattr(page, "url", ""))
+            parsed = urlparse(current_url)
+            if parsed.netloc == "xiaohongshu.com" or parsed.netloc.endswith(".xiaohongshu.com"):
+                print("小红书登录页加载较慢，已继续等待页面中的扫码登录。")
+                return
+            raise ApiRequestError(f"无法打开小红书登录页：{clean_text(exc)}") from exc
+
+    def _browser_candidates(self) -> tuple[str, ...]:
+        """返回浏览器尝试顺序；显式指定时不做其他回退。"""
+
+        if self.browser == "auto":
+            return ("edge", "chrome")
+        return (self.browser,)
+
+    def _launch_system_browser(self, playwright: Any, headless: bool) -> tuple[Any, str]:
+        """启动系统 Edge/Chrome，并为每种浏览器使用独立资料目录。"""
+
+        failures: list[str] = []
+        for browser_name in self._browser_candidates():
+            channel = BROWSER_CHANNELS[browser_name]
+            browser_profile = self.profile_dir / browser_name
+            browser_profile.mkdir(parents=True, exist_ok=True)
+            try:
+                context = playwright.chromium.launch_persistent_context(
+                    str(browser_profile),
+                    channel=channel,
+                    headless=headless,
+                    viewport={"width": 1440, "height": 1000},
+                )
+                print(f"正在使用系统 {browser_name.title()}。")
+                return context, browser_name
+            except Exception as exc:
+                failures.append(f"{browser_name}: {clean_text(exc)[:160]}")
+
+        requested = "Edge 或 Chrome" if self.browser == "auto" else self.browser.title()
+        detail = "；".join(failures)
+        raise BrowserNotFoundError(
+            f"无法启动系统 {requested}。请确认浏览器已安装且配置目录未被占用。{detail}"
+        )
+
+    @staticmethod
+    def _browser_cookies(context: Any) -> dict[str, str]:
+        """从小红书域名读取 Cookie，并转换为 xiaohongshu-cli 所需字典。"""
+
+        return {
+            clean_text(cookie.get("name")): clean_text(cookie.get("value"))
+            for cookie in context.cookies(XHS_HOME)
+            if clean_text(cookie.get("name")) and clean_text(cookie.get("value"))
+        }
+
+    @staticmethod
+    def _has_required_login_cookies(cookies: dict[str, str]) -> bool:
+        """确认签名和登录所需的三个 Cookie 都已经产生。"""
+
+        return all(cookies.get(name) for name in REQUIRED_LOGIN_COOKIES)
+
+    @staticmethod
+    def _has_visible_login_prompt(page: Any) -> bool:
+        """检查登录弹窗、登录容器或可见登录按钮。"""
+
+        try:
+            for selector in (
+                "[class*='login-container']",
+                "[class*='login-modal']",
+                "[class*='loginContainer']",
+            ):
+                locators = page.locator(selector)
+                for index in range(locators.count()):
+                    if locators.nth(index).is_visible():
+                        return True
+
+            buttons = page.get_by_role("button", name="登录", exact=True)
+            return any(buttons.nth(index).is_visible() for index in range(buttons.count()))
+        except Exception:
+            return False
+
+    @staticmethod
+    def _has_logged_in_marker(page: Any) -> bool:
+        """通过侧边栏当前账号的“我”入口确认页面已经进入登录态。"""
+
+        try:
+            links = page.locator("a[href*='/user/profile/']")
+            for index in range(links.count()):
+                link = links.nth(index)
+                if link.is_visible() and clean_text(link.inner_text()) == "我":
+                    return True
+        except Exception:
+            return False
+        return False
+
+    @staticmethod
+    def _confirmed_login_state(
+        cookies: dict[str, str],
+        initial_session: str,
+        prompt_seen: bool,
+        prompt_visible: bool,
+        logged_in_marker: bool,
+    ) -> bool:
+        """游客 Cookie 不算登录；必须看到会话变化和明确的页面状态变化。"""
+
+        session = cookies.get("web_session", "")
+        session_changed = bool(session and session != initial_session)
+        page_confirmed = logged_in_marker or (prompt_seen and not prompt_visible)
+        return (
+            XiaohongshuScraper._has_required_login_cookies(cookies)
+            and session_changed
+            and page_confirmed
+        )
+
+    @staticmethod
+    def _open_login_prompt(page: Any) -> bool:
+        """搜索页没有自动弹出登录框时，点击第一个可见登录按钮。"""
+
+        try:
+            buttons = page.get_by_role("button", name="登录", exact=True)
+            for index in range(buttons.count()):
+                button = buttons.nth(index)
+                if button.is_visible():
+                    button.click()
+                    return True
+        except Exception:
+            # 页面结构变化时仍允许用户在可见浏览器中手动点击登录。
+            return False
+        return False
+
+    def _wait_for_login_cookies(
+        self,
+        context: Any,
+        page: Any,
+        timeout_seconds: float,
+        initial_session: str = "",
+        prompt_seen: bool = False,
+    ) -> dict[str, str]:
+        """等待真实账号登录，不能把字段齐全的游客 Cookie 当成成功。"""
+
+        deadline = time.monotonic() + timeout_seconds
+        last_cookies: dict[str, str] = {}
+        while time.monotonic() < deadline:
+            if page.is_closed():
+                raise AuthRequiredError("登录完成前浏览器已被关闭")
+            try:
+                last_cookies = self._browser_cookies(context)
+            except Exception as exc:
+                if page.is_closed():
+                    raise AuthRequiredError("登录完成前浏览器已被关闭") from exc
+                raise ApiRequestError(f"读取浏览器 Cookie 失败：{clean_text(exc)}") from exc
+            prompt_visible = self._has_visible_login_prompt(page)
+            prompt_seen = prompt_seen or prompt_visible
+            logged_in_marker = self._has_logged_in_marker(page)
+            if self._confirmed_login_state(
+                last_cookies,
+                initial_session,
+                prompt_seen,
+                prompt_visible,
+                logged_in_marker,
+            ):
+                # 给浏览器少量时间写完同一批响应 Cookie。
+                time.sleep(1)
+                final_cookies = self._browser_cookies(context)
+                if self._confirmed_login_state(
+                    final_cookies,
+                    initial_session,
+                    prompt_seen,
+                    self._has_visible_login_prompt(page),
+                    self._has_logged_in_marker(page),
+                ):
+                    return final_cookies
+                last_cookies = final_cookies
+            time.sleep(1)
+
+        missing = [name for name in REQUIRED_LOGIN_COOKIES if not last_cookies.get(name)]
+        if not missing:
+            raise AuthRequiredError(
+                "等待扫码登录超时：检测到游客 Cookie，但没有确认真实账号登录"
+            )
+        raise AuthRequiredError(
+            f"等待扫码登录超时，缺少 Cookie：{', '.join(missing)}"
+        )
 
     def _open_client(self) -> Any:
         """读取扫码保存的 Cookie，并创建本次采集共用的客户端。"""
@@ -459,7 +695,7 @@ class XiaohongshuScraper:
         client_class, load_saved_cookies, _ = self._import_client_components()
         cookies = load_saved_cookies()
         if not cookies:
-            raise AuthRequiredError("没有找到登录状态，请先运行：python xhs_scraper.py --login")
+            raise AuthRequiredError("没有找到登录状态，请先运行：python xhs_client.py --login")
 
         # saved_at 是客户端的本地元数据，不应作为 Cookie 发给网站。
         normalized = {
@@ -571,13 +807,8 @@ class XiaohongshuScraper:
                 "解析淘宝/天猫链接需要 Playwright；也可以使用 --query 直接指定关键词"
             ) from exc
 
-        self.profile_dir.mkdir(parents=True, exist_ok=True)
         with sync_playwright() as playwright:
-            context = playwright.chromium.launch_persistent_context(
-                str(self.profile_dir),
-                headless=self.headless,
-                viewport={"width": 1440, "height": 1000},
-            )
+            context, _ = self._launch_system_browser(playwright, headless=self.headless)
             try:
                 page = context.pages[0] if context.pages else context.new_page()
                 page.goto(url, wait_until="domcontentloaded", timeout=60_000)
@@ -1023,7 +1254,17 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="?",
         help="商品关键词、小红书链接、淘宝链接或天猫链接",
     )
-    parser.add_argument("--login", action="store_true", help="在终端显示二维码并扫码登录小红书")
+    parser.add_argument(
+        "--login",
+        action="store_true",
+        help="打开系统 Edge/Chrome，扫码登录小红书",
+    )
+    parser.add_argument(
+        "--browser",
+        choices=("auto", "edge", "chrome"),
+        default="auto",
+        help="登录和商品页解析使用的系统浏览器，默认 auto（Edge 后 Chrome）",
+    )
     parser.add_argument("--query", help="为商品链接手动指定小红书搜索关键词")
     parser.add_argument("--output", type=Path, help="JSON 输出路径")
     parser.add_argument("--candidates", type=int, default=50, help="最多读取多少个候选，默认 50")
@@ -1056,7 +1297,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--profile-dir",
         type=Path,
         default=Path(".runtime/xhs-profile"),
-        help="仅解析淘宝/天猫商品页时使用的浏览器配置目录",
+        help="登录和解析淘宝/天猫商品页时使用的独立浏览器配置目录",
     )
     parser.add_argument(
         "--headless",
@@ -1078,6 +1319,7 @@ def run(args: argparse.Namespace) -> int:
         min_comment_likes=max(0, args.min_comment_likes),
         delay=args.delay,
         headless=args.headless,
+        browser=args.browser,
     )
 
     if args.login:
