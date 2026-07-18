@@ -4,6 +4,7 @@ export type AnalysisMode = "raw" | "trust_aware";
 export interface PageProduct {
   supported: boolean;
   platform: "taobao";
+  page_source: "taobao" | "tmall";
   page_url: string;
   source_product_id: string | null;
   title: string | null;
@@ -15,6 +16,7 @@ export interface PageProduct {
 
 export interface ResolveProductRequest {
   platform: "taobao";
+  page_source: "taobao" | "tmall";
   page_url: string;
   source_product_id: string | null;
   title: string | null;
@@ -132,6 +134,20 @@ export interface ProductAnalysisData {
   risk_summary: RiskSummary;
   top_sources: TopSource[];
   updated_at: string | null;
+}
+
+export type ProductAnalysisResponse = ProductAnalysisData;
+
+export type DemoScenarioId =
+  | "commute_noise_cancelling"
+  | "balanced_value"
+  | "comfort_first";
+
+export interface DemoProductScenario {
+  scenario_id: DemoScenarioId;
+  display_name: string;
+  description: string;
+  analysis: ProductAnalysisResponse;
 }
 
 export interface EvidenceItem {
