@@ -7,6 +7,8 @@ import type {
   ErrorResponse,
   EvidenceData,
   EvidenceQuery,
+  DemoProductScenario,
+  DemoScenarioId,
   PageProduct,
   ProductAnalysisData,
   RefreshJobData,
@@ -14,6 +16,17 @@ import type {
   ResolveProductData,
   ResolveProductRequest,
 } from "./types";
+
+export interface TrustLensApiClient {
+  resolveProduct(page: PageProduct, signal?: AbortSignal): Promise<ResolveProductData>;
+  getProductAnalysis(productId: string, options: { mode: AnalysisMode }, signal?: AbortSignal): Promise<ProductAnalysisData>;
+  getEvidence(productId: string, filters: EvidenceQuery, signal?: AbortSignal): Promise<EvidenceData>;
+  createRefreshJob(productId: string, request: RefreshRequest, signal?: AbortSignal): Promise<RefreshJobData>;
+  getRefreshJob(jobId: string, signal?: AbortSignal): Promise<RefreshJobData>;
+  getDemoScenarios?(): DemoProductScenario[];
+  getCurrentDemoScenarioId?(): DemoScenarioId;
+  setDemoScenario?(scenarioId: DemoScenarioId): ProductAnalysisData;
+}
 
 export class ApiError extends Error {
   constructor(
@@ -60,15 +73,15 @@ async function request<T>(path: string, init: RequestInit, signal?: AbortSignal)
   return body.data;
 }
 
-const realApiClient = {
+const realApiClient: TrustLensApiClient = {
   resolveProduct(page: PageProduct, signal?: AbortSignal): Promise<ResolveProductData> {
     const payload: ResolveProductRequest = { ...page, client_version: CLIENT_VERSION };
     const { supported: _supported, ...requestBody } = payload as ResolveProductRequest & { supported?: boolean };
     return request("/api/v1/products/resolve", { method: "POST", body: JSON.stringify(requestBody) }, signal);
   },
 
-  getAnalysis(productId: string, mode: AnalysisMode, signal?: AbortSignal): Promise<ProductAnalysisData> {
-    return request(`/api/v1/products/${encodeURIComponent(productId)}/analysis?mode=${mode}`, { method: "GET" }, signal);
+  getProductAnalysis(productId: string, options: { mode: AnalysisMode }, signal?: AbortSignal): Promise<ProductAnalysisData> {
+    return request(`/api/v1/products/${encodeURIComponent(productId)}/analysis?mode=${options.mode}`, { method: "GET" }, signal);
   },
 
   getEvidence(productId: string, query: EvidenceQuery, signal?: AbortSignal): Promise<EvidenceData> {
@@ -79,20 +92,13 @@ const realApiClient = {
     return request(`/api/v1/products/${encodeURIComponent(productId)}/evidence?${params}`, { method: "GET" }, signal);
   },
 
-  createRefresh(productId: string, signal?: AbortSignal): Promise<RefreshJobData> {
-    const payload: RefreshRequest = {
-      platforms: ["taobao", "xiaohongshu", "bilibili"],
-      force: false,
-      max_cache_age_hours: 24,
-      requested_by: "chrome_extension",
-      client_version: CLIENT_VERSION,
-    };
-    return request(`/api/v1/products/${encodeURIComponent(productId)}/refresh`, { method: "POST", body: JSON.stringify(payload) }, signal);
+  createRefreshJob(productId: string, refreshRequest: RefreshRequest, signal?: AbortSignal): Promise<RefreshJobData> {
+    return request(`/api/v1/products/${encodeURIComponent(productId)}/refresh`, { method: "POST", body: JSON.stringify(refreshRequest) }, signal);
   },
 
-  getJob(jobId: string, signal?: AbortSignal): Promise<RefreshJobData> {
+  getRefreshJob(jobId: string, signal?: AbortSignal): Promise<RefreshJobData> {
     return request(`/api/v1/jobs/${encodeURIComponent(jobId)}`, { method: "GET" }, signal);
   },
 };
 
-export const apiClient = USE_MOCK ? mockApiClient : realApiClient;
+export const apiClient: TrustLensApiClient = USE_MOCK ? mockApiClient : realApiClient;

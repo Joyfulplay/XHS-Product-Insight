@@ -27,7 +27,6 @@ export default defineConfig({
       input: {
         sidepanel: resolve(projectRoot, "sidepanel.html"),
         background: resolve(projectRoot, "src/background.ts"),
-        content: resolve(projectRoot, "src/content.ts"),
       },
       output: {
         entryFileNames: "assets/[name].js",

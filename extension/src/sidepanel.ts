@@ -1,8 +1,12 @@
 import "./sidepanel.css";
 import { ApiError, NetworkError, apiClient } from "./api/client";
+import { CLIENT_VERSION, USE_MOCK } from "./config";
+import { parseSupportedProductPage } from "./product_page";
 import type {
   AnalysisMode,
   Aspect,
+  DemoProductScenario,
+  DemoScenarioId,
   ErrorCode,
   EvidenceData,
   EvidenceQuery,
@@ -20,6 +24,7 @@ type ViewState = "loading" | "unsupported" | "error" | "ready";
 
 const state: {
   view: ViewState;
+  pageProduct: PageProduct | null;
   resolve: ResolveProductData | null;
   analysis: ProductAnalysisData | null;
   mode: AnalysisMode;
@@ -31,8 +36,12 @@ const state: {
   job: RefreshJobData | null;
   refreshing: boolean;
   notice: string | null;
+  preferences: PreferenceWeights;
+  demoScenarios: DemoProductScenario[];
+  selectedDemoScenarioId: DemoScenarioId | null;
 } = {
   view: "loading",
+  pageProduct: null,
   resolve: null,
   analysis: null,
   mode: "trust_aware",
@@ -44,10 +53,26 @@ const state: {
   job: null,
   refreshing: false,
   notice: null,
+  preferences: { noise_cancellation: 5, sound_quality: 4, comfort: 3, battery_life: 3, microphone: 2, price_value: 3 },
+  demoScenarios: USE_MOCK && apiClient.getDemoScenarios ? apiClient.getDemoScenarios() : [],
+  selectedDemoScenarioId: USE_MOCK && apiClient.getCurrentDemoScenarioId ? apiClient.getCurrentDemoScenarioId() : null,
+};
+
+type PreferenceKey = "noise_cancellation" | "sound_quality" | "comfort" | "battery_life" | "microphone" | "price_value";
+type PreferenceWeights = Record<PreferenceKey, number>;
+
+const preferenceLabels: Record<PreferenceKey, string> = {
+  noise_cancellation: "通勤降噪",
+  sound_quality: "音质",
+  comfort: "长时间佩戴",
+  battery_life: "续航",
+  microphone: "通话效果",
+  price_value: "性价比",
 };
 
 const controller = new AbortController();
 window.addEventListener("beforeunload", () => controller.abort(), { once: true });
+let initializationVersion = 0;
 
 const platformNames: Record<string, string> = {
   taobao: "淘宝",
@@ -91,6 +116,70 @@ function score(value: number | null): string {
   return value === null ? "暂无数据" : String(Math.round(value));
 }
 
+interface FitScoreResult {
+  score: number | null;
+  message: string | null;
+  validAspectCount: number;
+}
+
+function clampScore(value: number): number {
+  return Math.max(0, Math.min(100, value));
+}
+
+function aspectScoreMap(analysis: ProductAnalysisData): Partial<Record<PreferenceKey, number>> {
+  return Object.fromEntries(
+    analysis.aspects
+      .filter((aspect): aspect is Aspect & { aspect_code: PreferenceKey; trusted_sentiment_score: number } =>
+        (Object.keys(preferenceLabels) as string[]).includes(aspect.aspect_code) && aspect.trusted_sentiment_score !== null,
+      )
+      .map((aspect) => [aspect.aspect_code, aspect.trusted_sentiment_score]),
+  ) as Partial<Record<PreferenceKey, number>>;
+}
+
+function calculateFitScore(analysis: ProductAnalysisData, preferences = state.preferences): FitScoreResult {
+  const scores = aspectScoreMap(analysis);
+  const weighted = (Object.entries(preferences) as Array<[PreferenceKey, number]>)
+    .filter(([key, weight]) => weight > 0 && scores[key] !== undefined)
+    .map(([key, weight]) => ({ score: scores[key] ?? 0, weight }));
+
+  if ((Object.values(preferences) as number[]).every((weight) => weight === 0)) {
+    return { score: null, message: "请至少选择一个关注点", validAspectCount: 0 };
+  }
+  if (weighted.length < 2) {
+    return { score: null, message: "数据不足，暂不能生成稳定推荐", validAspectCount: weighted.length };
+  }
+
+  const weightSum = weighted.reduce((sum, item) => sum + item.weight, 0);
+  const fitScore = weighted.reduce((sum, item) => sum + item.score * item.weight, 0) / weightSum;
+  return { score: clampScore(fitScore), message: null, validAspectCount: weighted.length };
+}
+
+function recommendationGrade(value: number | null): string {
+  if (value === null) return "待判断";
+  if (value >= 85) return "强推荐";
+  if (value >= 75) return "推荐";
+  if (value >= 65) return "谨慎推荐";
+  return "不优先推荐";
+}
+
+function recommendationReason(analysis: ProductAnalysisData): string {
+  const scores = aspectScoreMap(analysis);
+  const prioritized = (Object.entries(state.preferences) as Array<[PreferenceKey, number]>)
+    .filter(([key, weight]) => weight > 0 && scores[key] !== undefined)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 2)
+    .map(([key]) => `${preferenceLabels[key]} ${score(scores[key] ?? null)}`);
+  return prioritized.length ? `当前权重下主要由 ${prioritized.join("、")} 拉动推荐分。` : "当前关注点不足，暂不能生成稳定推荐理由。";
+}
+
+function recommendationCaution(analysis: ProductAnalysisData): string {
+  const scores = aspectScoreMap(analysis);
+  const weakest = (Object.entries(state.preferences) as Array<[PreferenceKey, number]>)
+    .filter(([key, weight]) => weight > 0 && scores[key] !== undefined)
+    .sort((a, b) => (scores[a[0]] ?? 100) - (scores[b[0]] ?? 100))[0];
+  return weakest ? `注意 ${preferenceLabels[weakest[0]]} 的可信评分为 ${score(scores[weakest[0]] ?? null)}，建议结合证据查看。` : "注意当前为演示数据，不代表当前页面商品的真实分析。";
+}
+
 function percent(value: number | null): string {
   return value === null ? "暂无数据" : `${Math.round(value * 100)}%`;
 }
@@ -119,7 +208,7 @@ function renderShell(content: string): void {
     <main class="shell">
       <header class="topbar">
         <div class="brand"><span class="brand-mark">T</span><span>TrustLens</span></div>
-        ${state.analysis ? `<div class="top-actions"><span class="data-badge data-${state.analysis.data_status.mode}">${modeLabel(state.analysis.data_status.mode)}</span><button class="icon-button" id="refresh-button" ${state.refreshing ? "disabled" : ""} title="更新分析" aria-label="更新分析">${state.refreshing ? "···" : "↻"}</button></div>` : ""}
+        ${state.analysis ? `<div class="top-actions"><span class="data-badge data-demo">${USE_MOCK ? "演示数据" : modeLabel(state.analysis.data_status.mode)}</span><button class="icon-button" id="refresh-button" ${state.refreshing ? "disabled" : ""} title="更新分析" aria-label="更新分析">${state.refreshing ? "···" : "↻"}</button></div>` : ""}
       </header>
       ${content}
     </main>
@@ -141,12 +230,14 @@ function render(): void {
     renderShell(renderError(state.error));
     return;
   }
-  if (!state.analysis || !state.resolve) return;
+  if (!state.analysis || !state.resolve || !state.pageProduct) return;
 
   const analysis = state.analysis;
-  const product = analysis.product ?? state.resolve.product;
+  const pageProduct = state.pageProduct;
+  const fallbackProduct = analysis.product ?? state.resolve.product;
   const summary = analysis.summaries[state.mode].one_sentence_summary;
   const currentScore = state.mode === "raw" ? analysis.overview.raw_sentiment_score : analysis.overview.trusted_sentiment_score;
+  const fitScore = calculateFitScore(analysis);
   const failures = analysis.data_status.platform_failures ?? [];
 
   renderShell(`
@@ -154,19 +245,27 @@ function render(): void {
       ${state.notice ? `<div class="notice"><span>!</span><p>${escapeHtml(state.notice)}</p><button id="dismiss-notice" aria-label="关闭">×</button></div>` : ""}
       ${analysis.data_status.mode === "cache" ? `<div class="status-banner">当前展示缓存数据${analysis.data_status.is_stale ? "，可能不是最新结果" : ""}。</div>` : ""}
       ${analysis.analysis_status === "partial" || failures.length ? `<div class="status-banner warning">部分数据可用：${failures.length ? failures.map((item) => `${platformNames[item.platform]}（${item.reason}）`).join("；") : "部分平台分析失败"}</div>` : ""}
-      ${renderJob()}
 
       <section class="product-card card">
-        <div class="product-image">${product.display_image_url ? `<img src="${escapeHtml(product.display_image_url)}" alt="" />` : `<span>TL</span>`}</div>
+        <div class="product-image"><span>TL</span></div>
         <div class="product-copy">
-          <div class="eyebrow"><span class="match-dot"></span>${state.resolve.requires_user_confirmation ? "识别结果待确认" : state.resolve.match_status === "matched" ? "商品已识别" : text(state.resolve.match_status)} · ${percent(state.resolve.match_confidence)}</div>
-          <h1>${text(product.canonical_name)}</h1>
-          <p>${text(product.brand)} · ${text(product.model)}</p>
+          <div class="eyebrow"><span class="match-dot"></span>当前浏览页面商品</div>
+          <h1>${pageProduct.title ? escapeHtml(pageProduct.title) : "暂未识别商品标题"}</h1>
+          <p class="product-details">${pageSourceLabel(pageProduct.page_url)} · 商品 ID：${text(pageProduct.source_product_id)} · ${text(pageProduct.brand)} · ${text(pageProduct.model)}</p>
+          <p class="product-url" title="${escapeHtml(pageProduct.page_url)}">URL：${escapeHtml(pageProduct.page_url)}</p>
         </div>
       </section>
 
+      <div class="category-banner"><strong>试运行品类：蓝牙耳机</strong><span>当前前端使用蓝牙耳机 Mock 数据完成 dry run。</span></div>
+      ${USE_MOCK ? `<div class="demo-banner"><strong>演示数据</strong><span>当前分析结果为蓝牙耳机演示数据，不代表当前页面商品的真实分析。当前页面商品可能不属于蓝牙耳机，以下为蓝牙耳机演示数据。</span></div>` : ""}
+      ${renderDemoSwitcher()}
+      ${renderPreferenceControls()}
+      ${renderRecommendationResult(analysis, fitScore)}
+      ${renderSimilarProducts()}
+
       <section class="summary-card card accent-card">
         <div class="section-heading"><div><span class="eyebrow">一句话购买参考</span><h2>${state.mode === "trust_aware" ? "可信感知结论" : "原始评价结论"}</h2></div>${renderToggle()}</div>
+        <div class="demo-analysis-product"><span>当前选择的演示分析商品</span><strong>${text(fallbackProduct.canonical_name)}</strong><small>${text(fallbackProduct.brand)} · ${text(fallbackProduct.model)}</small></div>
         <p class="summary-text">${text(summary)}</p>
         ${state.mode === "trust_aware" && analysis.summaries.changed_claims.length ? `<div class="change-box"><strong>为什么结论有变化？</strong>${analysis.summaries.changed_claims.map((claim) => `<button class="claim-link" data-claim="${escapeHtml(claim.claim_id)}"><span>${escapeHtml(claim.text)}</span>${escapeHtml(claim.reason)} <b>查看证据 →</b></button>`).join("")}</div>` : ""}
       </section>
@@ -176,6 +275,7 @@ function render(): void {
         <div class="metric-grid">
           ${renderMetric("Raw", analysis.overview.raw_sentiment_score, false)}
           ${renderMetric("Trust-aware", analysis.overview.trusted_sentiment_score, true)}
+          ${renderMetric("按偏好推荐", fitScore.score, true)}
           <div class="confidence"><span>分析置信度</span><strong>${percent(analysis.overview.confidence)}</strong></div>
         </div>
         <p class="fine-print">分数反映已分析评价的情感倾向，并非商品客观质量分。</p>
@@ -198,9 +298,55 @@ function render(): void {
 
       ${renderRisk(analysis)}
       ${renderSources(analysis)}
+      ${renderJob()}
       <footer><span>更新于 ${dateTime(analysis.updated_at)}</span><span>TrustLens · 仅供决策参考</span></footer>
     </div>
   `);
+}
+
+function renderDemoSwitcher(): string {
+  if (!USE_MOCK || !state.demoScenarios.length) return "";
+  return `<section class="card demo-switcher">
+    <div class="section-heading"><div><span class="eyebrow">Mock dry run</span><h2>演示商品切换</h2></div></div>
+    <p class="module-copy">切换演示商品，观察不同用户需求下的推荐结果变化。</p>
+    <div class="demo-choice-list">
+      ${state.demoScenarios.map((scenario) => {
+        const selected = scenario.scenario_id === state.selectedDemoScenarioId;
+        return `<button class="demo-choice ${selected ? "selected" : ""}" data-demo-scenario="${scenario.scenario_id}" aria-pressed="${selected}">
+          <strong>${escapeHtml(scenario.display_name)}${selected ? " · 已选择" : ""}</strong>
+          <span>${escapeHtml(scenario.description)}</span>
+        </button>`;
+      }).join("")}
+    </div>
+  </section>`;
+}
+
+function renderPreferenceControls(): string {
+  return `<section class="card preference-card">
+    <div class="section-heading"><div><span class="eyebrow">用户关注点</span><h2>偏好权重</h2></div></div>
+    <div class="preference-controls">
+      ${(Object.keys(preferenceLabels) as PreferenceKey[]).map((key) => `<label><span>${preferenceLabels[key]}</span><input type="range" min="0" max="5" step="1" value="${state.preferences[key]}" data-preference="${key}" /><b>${state.preferences[key]}</b></label>`).join("")}
+    </div>
+  </section>`;
+}
+
+function renderRecommendationResult(analysis: ProductAnalysisData, fitScore: FitScoreResult): string {
+  return `<section class="card recommendation-card">
+    <div class="section-heading"><div><span class="eyebrow">个性化推荐结果</span><h2>${recommendationGrade(fitScore.score)}</h2></div><div class="score-orb compact"><b>${score(fitScore.score)}</b><small>/ 100</small></div></div>
+    ${fitScore.message ? `<div class="empty-state">${escapeHtml(fitScore.message)}</div>` : `<div class="recommendation-copy"><p><strong>推荐理由：</strong>${escapeHtml(recommendationReason(analysis))}</p><p><strong>注意事项：</strong>${escapeHtml(recommendationCaution(analysis))}</p></div>`}
+  </section>`;
+}
+
+function renderSimilarProducts(): string {
+  const ranked = state.demoScenarios
+    .map((scenario) => ({ scenario, fitScore: calculateFitScore(scenario.analysis).score }))
+    .sort((a, b) => (b.fitScore ?? -1) - (a.fitScore ?? -1));
+  return `<section class="card">
+    <div class="section-heading"><div><span class="eyebrow">同类商品建议</span><h2>蓝牙耳机排序</h2></div></div>
+    <div class="recommendation-list">
+      ${ranked.map((item, index) => `<div class="recommendation-row ${item.scenario.scenario_id === state.selectedDemoScenarioId ? "current" : ""}"><span>${index + 1}</span><div><strong>${escapeHtml(item.scenario.analysis.product.canonical_name)}</strong><small>${escapeHtml(item.scenario.display_name)}${item.scenario.scenario_id === state.selectedDemoScenarioId ? " · 当前分析商品" : ""}</small></div><b>${score(item.fitScore)}</b></div>`).join("")}
+    </div>
+  </section>`;
 }
 
 function renderToggle(): string {
@@ -277,6 +423,28 @@ function bindEvents(): void {
       render();
     });
   });
+  document.querySelectorAll<HTMLInputElement>("[data-preference]").forEach((input) => {
+    input.addEventListener("input", () => {
+      const key = input.dataset.preference as PreferenceKey | undefined;
+      if (!key) return;
+      state.preferences[key] = Number(input.value);
+      render();
+    });
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-demo-scenario]").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (!USE_MOCK || !apiClient.setDemoScenario) return;
+      const scenarioId = button.dataset.demoScenario as DemoScenarioId | undefined;
+      if (!scenarioId || scenarioId === state.selectedDemoScenarioId) return;
+      state.selectedDemoScenarioId = scenarioId;
+      state.analysis = apiClient.setDemoScenario(scenarioId);
+      state.resolve = state.resolve ? { ...state.resolve, product: state.analysis.product } : state.resolve;
+      state.evidence = null;
+      state.evidenceError = null;
+      state.evidenceLoading = false;
+      render();
+    });
+  });
   document.querySelectorAll<HTMLButtonElement>("[data-aspect]").forEach((button) => {
     button.addEventListener("click", () => void openEvidence({ aspect_code: button.dataset.aspect }, `${button.dataset.label ?? "方面"} · 参考证据`));
   });
@@ -345,12 +513,18 @@ async function startRefresh(): Promise<void> {
   state.notice = null;
   render();
   try {
-    state.job = await apiClient.createRefresh(state.resolve.product.product_id, controller.signal);
+    state.job = await apiClient.createRefreshJob(state.resolve.product.product_id, {
+      platforms: ["taobao", "xiaohongshu", "bilibili"],
+      force: false,
+      max_cache_age_hours: 24,
+      requested_by: "chrome_extension",
+      client_version: CLIENT_VERSION,
+    }, controller.signal);
     render();
     let poll = 0;
     while (["queued", "running"].includes(state.job.status)) {
       await wait(Math.min(5000, 1000 + poll * 1000));
-      state.job = await apiClient.getJob(state.job.job_id, controller.signal);
+      state.job = await apiClient.getRefreshJob(state.job.job_id, controller.signal);
       poll += 1;
       render();
     }
@@ -361,7 +535,7 @@ async function startRefresh(): Promise<void> {
       } else {
         state.notice = "分析已更新为最新结果。";
       }
-      state.analysis = await apiClient.getAnalysis(state.resolve.product.product_id, "trust_aware", controller.signal);
+      state.analysis = await apiClient.getProductAnalysis(state.resolve.product.product_id, { mode: "trust_aware" }, controller.signal);
     } else if (state.job.status === "failed") {
       state.notice = "更新任务失败，请稍后重试。";
     } else if (state.job.status === "cancelled") {
@@ -377,30 +551,52 @@ async function startRefresh(): Promise<void> {
 }
 
 async function activePageProduct(): Promise<PageProduct | null> {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab?.id || !tab.url) return null;
-  const url = new URL(tab.url);
-  if (url.hostname !== "item.taobao.com" || !url.pathname.endsWith("/item.htm") || !url.searchParams.get("id")) return null;
   try {
-    return (await chrome.tabs.sendMessage(tab.id, { type: "GET_PAGE_PRODUCT" })) as PageProduct;
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id || !tab.url || !parseSupportedProductPage(tab.url)?.sourceProductId) return null;
+    const page = await chrome.tabs.sendMessage(tab.id, { type: "GET_PAGE_PRODUCT" });
+    return isPageProduct(page) ? page : null;
   } catch {
     return null;
   }
 }
 
+function isPageProduct(value: unknown): value is PageProduct {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "supported" in value &&
+    "page_url" in value &&
+    "source_product_id" in value &&
+    typeof value.page_url === "string"
+  );
+}
+
+function pageSourceLabel(pageUrl: string): "淘宝" | "天猫" {
+  return parseSupportedProductPage(pageUrl)?.source === "tmall" ? "天猫" : "淘宝";
+}
+
 async function initialize(): Promise<void> {
+  const version = ++initializationVersion;
   state.view = "loading";
   state.error = null;
   render();
   try {
     const page = await activePageProduct();
+    if (version !== initializationVersion) return;
     if (!page?.supported) {
+      state.pageProduct = null;
+      state.resolve = null;
+      state.analysis = null;
       state.view = "unsupported";
       render();
       return;
     }
+    state.pageProduct = page;
     state.resolve = await apiClient.resolveProduct(page, controller.signal);
-    state.analysis = await apiClient.getAnalysis(state.resolve.product.product_id, "trust_aware", controller.signal);
+    if (version !== initializationVersion) return;
+    state.analysis = await apiClient.getProductAnalysis(state.resolve.product.product_id, { mode: "trust_aware" }, controller.signal);
+    if (version !== initializationVersion) return;
     if (state.analysis.analysis_status === "pending") {
       throw new ApiError({ code: "ANALYSIS_NOT_READY", message: "分析尚未准备", details: {}, retryable: false });
     }
@@ -412,5 +608,13 @@ async function initialize(): Promise<void> {
   }
   render();
 }
+
+chrome.tabs.onActivated.addListener(() => void initialize());
+chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
+  if (tab.active && (changeInfo.status === "complete" || changeInfo.url !== undefined)) {
+    void initialize();
+  }
+});
+window.addEventListener("focus", () => void initialize());
 
 void initialize();
