@@ -1,4 +1,4 @@
-export type Platform = "taobao" | "xiaohongshu" | "bilibili";
+export type Platform = "xiaohongshu";
 export type AnalysisMode = "raw" | "trust_aware";
 
 export interface PageProduct {
@@ -230,4 +230,59 @@ export interface ErrorBody {
 export interface ErrorResponse {
   error: ErrorBody;
   meta: ApiMeta;
+}
+
+export type CrawlerServiceStatus = "checking" | "connected" | "not_started";
+
+export type XiaohongshuLoginStatus =
+  | "not_logged_in"
+  | "opening_browser"
+  | "waiting_for_login"
+  | "logged_in"
+  | "expired"
+  | "error";
+
+export interface CrawlerServiceState {
+  status: CrawlerServiceStatus;
+  checked_at: string | null;
+  message: string | null;
+}
+
+export interface XiaohongshuLoginState {
+  status: XiaohongshuLoginStatus;
+  message: string | null;
+}
+
+export interface CrawlConfig {
+  max_notes: number;
+  max_comments_per_note: number;
+}
+
+export type CrawlJobStatus = "idle" | "queued" | "crawling" | "formatting" | "completed" | "failed" | "cancelled";
+export type CrawlJobStage = "waiting" | "crawling_notes" | "formatting_dataset" | "completed" | "failed" | "cancelled";
+
+export interface CrawlJobData {
+  job_id: string | null;
+  status: CrawlJobStatus;
+  stage: CrawlJobStage;
+  progress: number;
+  collected_notes: number;
+  collected_comments: number;
+  error_message: string | null;
+}
+
+export interface CrawlStartRequest {
+  keyword: string;
+  page_product: PageProduct;
+  preferences: Record<string, number>;
+  config: CrawlConfig;
+}
+
+export interface FormattedCrawlerDataPreview {
+  product: PageProduct;
+  keyword: string;
+  preferences: Record<string, number>;
+  note_count: number;
+  comment_count: number;
+  generated_at: string;
 }

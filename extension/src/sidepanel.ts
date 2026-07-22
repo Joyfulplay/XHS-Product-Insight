@@ -1,5 +1,14 @@
 import "./sidepanel.css";
 import { ApiError, NetworkError, apiClient } from "./api/client";
+import { crawlerClient } from "./api/crawler_client";
+import {
+  clampInteger,
+  createInitialCollectionFlowState,
+  defaultKeywordForProduct,
+  renderCollectionFlow,
+  validateCrawlReady,
+  type CollectionFlowState,
+} from "./collection_flow";
 import { CLIENT_VERSION, USE_MOCK } from "./config";
 import { parseSupportedProductPage } from "./product_page";
 import type {
@@ -10,6 +19,7 @@ import type {
   ErrorCode,
   EvidenceData,
   EvidenceQuery,
+  CrawlStartRequest,
   PageProduct,
   ProductAnalysisData,
   RefreshJobData,
@@ -37,6 +47,7 @@ const state: {
   refreshing: boolean;
   notice: string | null;
   preferences: PreferenceWeights;
+  collection: CollectionFlowState;
   demoScenarios: DemoProductScenario[];
   selectedDemoScenarioId: DemoScenarioId | null;
 } = {
@@ -54,6 +65,7 @@ const state: {
   refreshing: false,
   notice: null,
   preferences: { noise_cancellation: 5, sound_quality: 4, comfort: 3, battery_life: 3, microphone: 2, price_value: 3 },
+  collection: createInitialCollectionFlowState(),
   demoScenarios: USE_MOCK && apiClient.getDemoScenarios ? apiClient.getDemoScenarios() : [],
   selectedDemoScenarioId: USE_MOCK && apiClient.getCurrentDemoScenarioId ? apiClient.getCurrentDemoScenarioId() : null,
 };
@@ -73,11 +85,11 @@ const preferenceLabels: Record<PreferenceKey, string> = {
 const controller = new AbortController();
 window.addEventListener("beforeunload", () => controller.abort(), { once: true });
 let initializationVersion = 0;
+let crawlPollingVersion = 0;
+let loginPollingVersion = 0;
 
 const platformNames: Record<string, string> = {
-  taobao: "淘宝",
   xiaohongshu: "小红书",
-  bilibili: "B站",
 };
 
 const stageNames: Record<string, string> = {
@@ -98,7 +110,7 @@ const errorMessages: Record<ErrorCode, { title: string; detail: string }> = {
   UNSUPPORTED_PLATFORM: { title: "暂不支持此平台", detail: "目前仅支持淘宝商品详情页。" },
   PRODUCT_NOT_IDENTIFIED: { title: "无法识别商品", detail: "请确认已打开带有商品 ID 的淘宝详情页。" },
   RATE_LIMITED: { title: "请求过于频繁", detail: "请稍后再试。" },
-  UPSTREAM_ERROR: { title: "部分来源返回异常", detail: "暂时无法获取完整的跨平台数据。" },
+  UPSTREAM_ERROR: { title: "小红书数据返回异常", detail: "暂时无法获取完整的小红书笔记与评论数据。" },
   UPSTREAM_UNAVAILABLE: { title: "数据来源暂不可用", detail: "服务恢复后可以重试。" },
   MODEL_UNAVAILABLE: { title: "分析服务暂不可用", detail: "已采集内容不会丢失，请稍后重试。" },
   INTERNAL_ERROR: { title: "服务出现异常", detail: "请稍后重试；若持续发生可提供请求编号。" },
@@ -244,7 +256,7 @@ function render(): void {
     <div class="content">
       ${state.notice ? `<div class="notice"><span>!</span><p>${escapeHtml(state.notice)}</p><button id="dismiss-notice" aria-label="关闭">×</button></div>` : ""}
       ${analysis.data_status.mode === "cache" ? `<div class="status-banner">当前展示缓存数据${analysis.data_status.is_stale ? "，可能不是最新结果" : ""}。</div>` : ""}
-      ${analysis.analysis_status === "partial" || failures.length ? `<div class="status-banner warning">部分数据可用：${failures.length ? failures.map((item) => `${platformNames[item.platform]}（${item.reason}）`).join("；") : "部分平台分析失败"}</div>` : ""}
+      ${analysis.analysis_status === "partial" || failures.length ? `<div class="status-banner warning">部分小红书数据可用：${failures.length ? failures.map((item) => `${platformNames[item.platform] ?? "小红书"}（${item.reason}）`).join("；") : "小红书分析暂未完整完成"}</div>` : ""}
 
       <section class="product-card card">
         <div class="product-image"><span>TL</span></div>
@@ -257,7 +269,9 @@ function render(): void {
       </section>
 
       <div class="category-banner"><strong>试运行品类：蓝牙耳机</strong><span>当前前端使用蓝牙耳机 Mock 数据完成 dry run。</span></div>
-      ${USE_MOCK ? `<div class="demo-banner"><strong>演示数据</strong><span>当前分析结果为蓝牙耳机演示数据，不代表当前页面商品的真实分析。当前页面商品可能不属于蓝牙耳机，以下为蓝牙耳机演示数据。</span></div>` : ""}
+      <div class="category-banner"><strong>数据范围</strong><span>当前商品信息来自淘宝/天猫，评论分析数据仅来自小红书。</span></div>
+      ${renderCollectionFlow(state.collection, pageProduct, state.preferences)}
+      ${USE_MOCK ? `<div class="demo-banner"><strong>Mock 小红书数据</strong><span>当前分析结果为小红书笔记与评论 Mock 数据，不代表当前页面商品的真实分析。</span></div>` : ""}
       ${renderDemoSwitcher()}
       ${renderPreferenceControls()}
       ${renderRecommendationResult(analysis, fitScore)}
@@ -271,25 +285,17 @@ function render(): void {
       </section>
 
       <section class="card">
-        <div class="section-heading"><div><span class="eyebrow">总体评价倾向</span><h2>综合评分</h2></div><div class="score-orb"><b>${score(currentScore)}</b><small>/ 100</small></div></div>
+        <div class="section-heading"><div><span class="eyebrow">小红书评论倾向</span><h2>情感与可信评分</h2></div><div class="score-orb"><b>${score(currentScore)}</b><small>/ 100</small></div></div>
         <div class="metric-grid">
-          ${renderMetric("Raw", analysis.overview.raw_sentiment_score, false)}
-          ${renderMetric("Trust-aware", analysis.overview.trusted_sentiment_score, true)}
+          ${renderMetric("原始情感", analysis.overview.raw_sentiment_score, false)}
+          ${renderMetric("可信情感", analysis.overview.trusted_sentiment_score, true)}
           ${renderMetric("按偏好推荐", fitScore.score, true)}
           <div class="confidence"><span>分析置信度</span><strong>${percent(analysis.overview.confidence)}</strong></div>
         </div>
-        <p class="fine-print">分数反映已分析评价的情感倾向，并非商品客观质量分。</p>
+        <p class="fine-print">分数仅反映小红书笔记与评论中的评价倾向，并非商品客观质量分。</p>
       </section>
 
-      <section class="card">
-        <div class="section-heading"><div><span class="eyebrow">跨平台观察</span><h2>平台对比</h2></div><small>${analysis.coverage.total_content_count.toLocaleString("zh-CN")} 条内容</small></div>
-        ${analysis.platform_comparison.length ? `<div class="platform-list">${analysis.platform_comparison.map((item) => `
-          <div class="platform-row">
-            <div class="platform-meta"><span class="platform-icon platform-${item.platform}">${platformNames[item.platform]?.slice(0, 1)}</span><div><strong>${platformNames[item.platform] ?? item.platform}</strong><small>${item.content_count.toLocaleString("zh-CN")} 条</small></div></div>
-            <div class="mini-scores"><span>Raw <b>${score(item.raw_sentiment_score)}</b></span><span>可信 <b>${score(item.trusted_sentiment_score)}</b></span></div>
-            <div class="risk-cell"><small>高风险</small><b>${percent(item.high_risk_ratio)}</b></div>
-          </div>`).join("")}</div>` : renderEmpty("暂无平台对比数据")}
-      </section>
+      ${renderXhsAnalysisOverview(analysis)}
 
       <section class="card">
         <div class="section-heading"><div><span class="eyebrow">具体表现</span><h2>方面评价</h2></div><small>点击查看证据</small></div>
@@ -364,7 +370,7 @@ function renderMetric(label: string, value: number | null, trusted: boolean): st
 function renderAspect(aspect: Aspect): string {
   const disagreement = aspect.platform_disagreement_score !== null && aspect.platform_disagreement_score >= 0.45;
   return `<button class="aspect-row" data-aspect="${escapeHtml(aspect.aspect_code)}" data-label="${escapeHtml(aspect.aspect_label)}">
-    <div class="aspect-top"><div><strong>${escapeHtml(aspect.aspect_label)}</strong><small>${aspect.mention_count.toLocaleString("zh-CN")} 次提及 ${disagreement ? `<em>平台分歧较高</em>` : ""}</small></div><span class="aspect-score">${score(aspect.trusted_sentiment_score)}<small>/100</small></span></div>
+    <div class="aspect-top"><div><strong>${escapeHtml(aspect.aspect_label)}</strong><small>${aspect.mention_count.toLocaleString("zh-CN")} 次提及 ${disagreement ? `<em>评论分歧较高</em>` : ""}</small></div><span class="aspect-score">${score(aspect.trusted_sentiment_score)}<small>/100</small></span></div>
     <div class="sentiment-bar" aria-label="正面 ${percent(aspect.positive_ratio)}，中性 ${percent(aspect.neutral_ratio)}，负面 ${percent(aspect.negative_ratio)}">
       <i class="positive" style="width:${(aspect.positive_ratio ?? 0) * 100}%"></i><i class="neutral" style="width:${(aspect.neutral_ratio ?? 0) * 100}%"></i><i class="negative" style="width:${(aspect.negative_ratio ?? 0) * 100}%"></i>
     </div>
@@ -381,10 +387,50 @@ function renderRisk(analysis: ProductAnalysisData): string {
   </section>`;
 }
 
+function renderXhsAnalysisOverview(analysis: ProductAnalysisData): string {
+  const total = analysis.coverage.total_content_count;
+  const cleaned = Math.max(0, total - analysis.risk_summary.high_risk_count);
+  const topAspects = analysis.aspects.slice(0, 4).map((aspect) => aspect.aspect_label).join("、") || "暂无数据";
+  const strengths = analysis.aspects
+    .filter((aspect) => (aspect.trusted_sentiment_score ?? 0) >= 78)
+    .slice(0, 3)
+    .map((aspect) => aspect.aspect_label);
+  const weaknesses = analysis.aspects
+    .filter((aspect) => (aspect.trusted_sentiment_score ?? 100) < 72)
+    .slice(0, 3)
+    .map((aspect) => aspect.aspect_label);
+  const keywords = analysis.aspects
+    .slice()
+    .sort((a, b) => b.mention_count - a.mention_count)
+    .slice(0, 6)
+    .map((aspect) => aspect.aspect_label)
+    .join(" / ");
+  const suggestion = analysis.summaries.trust_aware.one_sentence_summary ?? "等待后端返回购买建议。";
+  return `<section class="card xhs-result-card">
+    <div class="section-heading"><div><span class="eyebrow">小红书评论分析</span><h2>分析结果</h2></div><small>仅基于小红书笔记与评论</small></div>
+    <div class="xhs-stat-grid">
+      <div><span>采集笔记数</span><strong>${Math.max(1, Math.round(total / 42)).toLocaleString("zh-CN")}</strong></div>
+      <div><span>原始评论数</span><strong>${total.toLocaleString("zh-CN")}</strong></div>
+      <div><span>清洗后有效评论数</span><strong>${cleaned.toLocaleString("zh-CN")}</strong></div>
+      <div><span>风险内容占比</span><strong>${percent(analysis.risk_summary.high_risk_ratio)}</strong></div>
+    </div>
+    <div class="xhs-insight-list">
+      <p><strong>产品属性：</strong>${escapeHtml(topAspects)}</p>
+      <p><strong>使用场景：</strong>通勤、办公、日常佩戴等场景由后端从小红书评论中抽取。</p>
+      <p><strong>用户类型：</strong>预算敏感用户、通勤用户、长时间佩戴用户等由后端归纳。</p>
+      <p><strong>优点：</strong>${escapeHtml(strengths.length ? strengths.join("、") : "等待后端抽取")}</p>
+      <p><strong>缺点：</strong>${escapeHtml(weaknesses.length ? weaknesses.join("、") : "等待后端抽取")}</p>
+      <p><strong>购买建议：</strong>${text(suggestion)}</p>
+      <p><strong>高频关键词：</strong>${escapeHtml(keywords || "暂无数据")}</p>
+    </div>
+  </section>`;
+}
+
 function renderSources(analysis: ProductAnalysisData): string {
+  const xhsSources = analysis.top_sources.filter((source) => source.platform === "xiaohongshu");
   return `<section class="card">
-    <div class="section-heading"><div><span class="eyebrow">延伸阅读</span><h2>推荐来源</h2></div></div>
-    ${analysis.top_sources.length ? `<div class="source-list">${analysis.top_sources.map((source, index) => `<button class="source-row external-link" data-source-index="${index}"><span class="source-platform">${platformNames[source.platform] ?? source.platform}</span><strong>${escapeHtml(source.source_title)}</strong><small>${dateTime(source.publish_time)} · 相关度 ${percent(source.relevance_score)} · 风险分数 ${source.risk_score === null ? "暂无数据" : source.risk_score.toFixed(2)}</small><i>↗</i></button>`).join("")}</div>` : renderEmpty("暂无推荐来源")}
+    <div class="section-heading"><div><span class="eyebrow">${USE_MOCK ? "Mock 小红书内容" : "小红书内容"}</span><h2>小红书代表性内容</h2></div></div>
+    ${xhsSources.length ? `<div class="source-list">${xhsSources.map((source) => `<button class="source-row external-link" data-source-url="${escapeHtml(source.source_url)}"><span class="source-platform">小红书</span><strong>${escapeHtml(source.source_title)}</strong><small>${dateTime(source.publish_time)} · 相关度 ${percent(source.relevance_score)} · 风险分数 ${source.risk_score === null ? "暂无数据" : source.risk_score.toFixed(2)}</small><i>↗</i></button>`).join("")}</div>` : renderEmpty("暂无小红书代表性内容")}
   </section>`;
 }
 
@@ -431,6 +477,33 @@ function bindEvents(): void {
       render();
     });
   });
+  const keywordInput = document.querySelector<HTMLInputElement>("#crawler-keyword");
+  keywordInput?.addEventListener("input", () => {
+    const input = keywordInput;
+    state.collection.keyword = input.value;
+    state.collection.keywordTouched = true;
+    state.collection.formError = validateCrawlReady(state.collection);
+    render();
+  });
+  const maxNotesInput = document.querySelector<HTMLInputElement>("#crawler-max-notes");
+  maxNotesInput?.addEventListener("change", () => {
+    const input = maxNotesInput;
+    state.collection.config.max_notes = clampInteger(Number(input.value), 1, 50);
+    state.collection.formError = validateCrawlReady(state.collection);
+    render();
+  });
+  const maxCommentsInput = document.querySelector<HTMLInputElement>("#crawler-max-comments");
+  maxCommentsInput?.addEventListener("change", () => {
+    const input = maxCommentsInput;
+    state.collection.config.max_comments_per_note = clampInteger(Number(input.value), 0, 100);
+    state.collection.formError = validateCrawlReady(state.collection);
+    render();
+  });
+  document.querySelector<HTMLButtonElement>("#crawler-check-button")?.addEventListener("click", () => void checkCrawlerService());
+  document.querySelector<HTMLButtonElement>("#xhs-login-button")?.addEventListener("click", () => void connectXiaohongshu());
+  document.querySelector<HTMLButtonElement>("#start-crawl-button")?.addEventListener("click", () => void startCrawl());
+  document.querySelector<HTMLButtonElement>("#cancel-crawl-button")?.addEventListener("click", () => void cancelCrawl());
+  document.querySelector<HTMLButtonElement>("#submit-analysis-button")?.addEventListener("click", () => void submitFormattedPreview());
   document.querySelectorAll<HTMLButtonElement>("[data-demo-scenario]").forEach((button) => {
     button.addEventListener("click", () => {
       if (!USE_MOCK || !apiClient.setDemoScenario) return;
@@ -451,10 +524,10 @@ function bindEvents(): void {
   document.querySelectorAll<HTMLButtonElement>("[data-claim]").forEach((button) => {
     button.addEventListener("click", () => void openEvidence({ claim_id: button.dataset.claim }, "结论变化 · 参考证据"));
   });
-  document.querySelectorAll<HTMLButtonElement>("[data-source-index]").forEach((button) => {
+  document.querySelectorAll<HTMLButtonElement>("[data-source-url]").forEach((button) => {
     button.addEventListener("click", () => {
-      const source = state.analysis?.top_sources[Number(button.dataset.sourceIndex)];
-      if (source) openExternal(source.source_url);
+      const url = button.dataset.sourceUrl;
+      if (url) openExternal(url);
     });
   });
   document.querySelectorAll<HTMLButtonElement>("[data-evidence-index]").forEach((button) => {
@@ -514,7 +587,7 @@ async function startRefresh(): Promise<void> {
   render();
   try {
     state.job = await apiClient.createRefreshJob(state.resolve.product.product_id, {
-      platforms: ["taobao", "xiaohongshu", "bilibili"],
+      platforms: ["xiaohongshu"],
       force: false,
       max_cache_age_hours: 24,
       requested_by: "chrome_extension",
@@ -530,7 +603,7 @@ async function startRefresh(): Promise<void> {
     }
     if (state.job.status === "succeeded" || state.job.status === "partially_succeeded") {
       if (state.job.status === "partially_succeeded") {
-        const failed = state.job.platform_failures?.map((item) => platformNames[item.platform] ?? item.platform).join("、") ?? "部分平台";
+        const failed = state.job.platform_failures?.map((item) => platformNames[item.platform] ?? "小红书").join("、") ?? "小红书";
         state.notice = `分析已更新，但 ${failed} 更新失败，当前结果可能不完整。`;
       } else {
         state.notice = "分析已更新为最新结果。";
@@ -546,6 +619,125 @@ async function startRefresh(): Promise<void> {
     state.notice = error instanceof ApiError ? (errorMessages[error.error.code]?.detail ?? "更新失败") : "无法连接服务，更新失败。";
   } finally {
     state.refreshing = false;
+    render();
+  }
+}
+
+function currentCrawlRequest(): CrawlStartRequest | null {
+  if (!state.pageProduct) return null;
+  return {
+    keyword: state.collection.keyword.trim(),
+    page_product: state.pageProduct,
+    preferences: { ...state.preferences },
+    config: { ...state.collection.config },
+  };
+}
+
+async function checkCrawlerService(): Promise<void> {
+  state.collection.service = { status: "checking", checked_at: null, message: "正在检测本地采集服务" };
+  state.collection.formError = null;
+  render();
+  try {
+    state.collection.service = await crawlerClient.checkService(controller.signal);
+  } catch (error: unknown) {
+    if (error instanceof DOMException && error.name === "AbortError") return;
+    state.collection.service = { status: "not_started", checked_at: new Date().toISOString(), message: "本地采集服务未启动" };
+  } finally {
+    state.collection.formError = validateCrawlReady(state.collection);
+    render();
+  }
+}
+
+async function connectXiaohongshu(): Promise<void> {
+  const version = ++loginPollingVersion;
+  state.collection.login = { status: "opening_browser", message: "正在打开小红书登录窗口" };
+  state.collection.submitMessage = null;
+  render();
+  try {
+    state.collection.login = await crawlerClient.startLogin(controller.signal);
+    render();
+    while (version === loginPollingVersion && ["opening_browser", "waiting_for_login"].includes(state.collection.login.status)) {
+      await wait(650);
+      state.collection.login = await crawlerClient.getLoginStatus(controller.signal);
+      state.collection.formError = validateCrawlReady(state.collection);
+      render();
+      if (state.collection.login.status === "logged_in") break;
+    }
+  } catch (error: unknown) {
+    if (error instanceof DOMException && error.name === "AbortError") return;
+    state.collection.login = { status: "error", message: "无法打开或确认小红书登录" };
+    state.collection.formError = validateCrawlReady(state.collection);
+    render();
+  }
+}
+
+async function startCrawl(): Promise<void> {
+  const request = currentCrawlRequest();
+  if (!request) return;
+  const validation = validateCrawlReady(state.collection);
+  state.collection.formError = validation;
+  if (validation) {
+    render();
+    return;
+  }
+  const version = ++crawlPollingVersion;
+  state.collection.formattedPreview = null;
+  state.collection.submitMessage = null;
+  render();
+  try {
+    state.collection.crawlJob = await crawlerClient.startCrawl(request, controller.signal);
+    render();
+    while (version === crawlPollingVersion && state.collection.crawlJob.job_id && ["queued", "crawling", "formatting"].includes(state.collection.crawlJob.status)) {
+      await wait(750);
+      state.collection.crawlJob = await crawlerClient.getCrawlJob(state.collection.crawlJob.job_id, controller.signal);
+      render();
+    }
+    if (version === crawlPollingVersion && state.collection.crawlJob.status === "completed") {
+      state.collection.formattedPreview = crawlerClient.createFormattedPreview(request, state.collection.crawlJob);
+      render();
+    }
+  } catch (error: unknown) {
+    if (error instanceof DOMException && error.name === "AbortError") return;
+    state.collection.crawlJob = {
+      job_id: state.collection.crawlJob.job_id,
+      status: "failed",
+      stage: "failed",
+      progress: state.collection.crawlJob.progress,
+      collected_notes: state.collection.crawlJob.collected_notes,
+      collected_comments: state.collection.crawlJob.collected_comments,
+      error_message: "采集任务启动或轮询失败",
+    };
+    render();
+  }
+}
+
+async function cancelCrawl(): Promise<void> {
+  const jobId = state.collection.crawlJob.job_id;
+  crawlPollingVersion += 1;
+  if (!jobId) {
+    state.collection.crawlJob = { ...state.collection.crawlJob, status: "cancelled", stage: "cancelled", progress: 0 };
+    render();
+    return;
+  }
+  try {
+    state.collection.crawlJob = await crawlerClient.cancelCrawl(jobId, controller.signal);
+  } catch {
+    state.collection.crawlJob = { ...state.collection.crawlJob, status: "cancelled", stage: "cancelled" };
+  }
+  state.collection.formattedPreview = null;
+  render();
+}
+
+async function submitFormattedPreview(): Promise<void> {
+  if (!state.collection.formattedPreview || state.collection.submitting) return;
+  state.collection.submitting = true;
+  state.collection.submitMessage = null;
+  render();
+  try {
+    await wait(600);
+    state.collection.submitMessage = "已模拟提交给后端分析，等待真实接口接入。";
+  } finally {
+    state.collection.submitting = false;
     render();
   }
 }
@@ -593,6 +785,12 @@ async function initialize(): Promise<void> {
       return;
     }
     state.pageProduct = page;
+    if (!state.collection.keywordTouched) {
+      state.collection.keyword = defaultKeywordForProduct(page);
+    }
+    if (state.collection.service.status === "checking" && !state.collection.service.checked_at) {
+      void checkCrawlerService();
+    }
     state.resolve = await apiClient.resolveProduct(page, controller.signal);
     if (version !== initializationVersion) return;
     state.analysis = await apiClient.getProductAnalysis(state.resolve.product.product_id, { mode: "trust_aware" }, controller.signal);
