@@ -74,7 +74,7 @@ Xiaohongshu is the only source of review-analysis data. The planned collection d
 | Local crawler connector | Handle Xiaohongshu login, collect notes and comments, manage asynchronous tasks, and return desensitized structured data |
 | Analysis backend | Clean data, calculate statistics, invoke the LLM, apply preference-based scoring, and generate product insights |
 
-The backend implementation and final analysis API are still under development. This README therefore describes their responsibilities without assuming a specific framework, directory structure, or startup command.
+The analysis backend implementation and final analysis API are still under development. This README therefore describes their responsibilities without assuming a specific analysis framework, directory structure, or startup command. The local crawler connector is implemented separately and exposes only login, collection, and desensitized-raw-data endpoints.
 
 ## Browser Extension
 
@@ -129,11 +129,23 @@ The current proposed interface contract is:
 
 These endpoints are an integration proposal and may be adjusted when the backend contract is finalized.
 
-The crawler should receive only the product source and an optional user-edited search query:
+### Run the Local Crawler Connector
+
+The connector implementation is a local FastAPI service. This command starts only the crawler connector; it does not imply that the analysis backend contract is finalized.
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r .\backend\app\data\crawlers\requirements.txt
+Set-Location backend
+..\.venv\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 8000
+```
+
+It keeps task state in memory, so restarting the service clears prior job IDs. The login-status endpoint confirms that the required local cookie fields are present; an expired server-side session is reported by a later collection task as `AUTH_REQUIRED`.
+
+The crawler should receive either a product keyword or a Taobao/Tmall product link, plus an optional user-edited search query:
 
 ```json
 {
-  "source": "https://detail.tmall.com/...",
+  "source": "Sony WH-1000XM5",
   "query_override": "optional Xiaohongshu search query"
 }
 ```
@@ -149,7 +161,7 @@ The connector should return desensitized structured raw data rather than an LLM 
   "schema_version": "1.1",
   "collected_at": "2026-07-22T00:00:00Z",
   "input": {
-    "source": "taobao_or_tmall",
+    "source": "keyword",
     "query": "product keyword"
   },
   "collection": {
@@ -177,6 +189,7 @@ The connector should return desensitized structured raw data rather than an LLM 
 ```
 
 The exact schema should be versioned and shared by the connector, analysis backend, and extension.
+Here, `input.source` is `keyword` for a direct product-name search and `taobao_or_tmall` for a product-link search.
 
 ## Data Security
 
@@ -276,13 +289,12 @@ After changing extension code, rebuild the project and reload the unpacked exten
 - user preference settings, scoring, and ranking;
 - Xiaohongshu-only result presentation;
 - TypeScript type checking and production build scripts.
+- local asynchronous Xiaohongshu login and collection connector;
+- connector-side result-schema normalization and sensitive-field removal.
 
 ### In Progress
 
-- real local crawler connector;
-- asynchronous Xiaohongshu login and collection integration;
 - unified task states and error codes;
-- connector-side desensitization;
 - real analysis-backend contract;
 - complete frontend-to-backend integration.
 
