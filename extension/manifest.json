@@ -5,15 +5,15 @@
   "version": "0.1.0",
   "permissions": ["sidePanel", "activeTab"],
   "host_permissions": [
-    "https://item.taobao.com/*",
-    "https://detail.tmall.com/*",
-    "https://chaoshi.detail.tmall.com/*",
-    "https://detail.m.tmall.com/*",
-    "https://detail.tmall.hk/*",
-    "http://localhost:8000/*",
-    "http://127.0.0.1:8000/*",
-    "https://www.xiaohongshu.com/*"
-  ],
+  "https://item.taobao.com/*",
+  "https://detail.tmall.com/*",
+  "https://chaoshi.detail.tmall.com/*",
+  "https://detail.m.tmall.com/*",
+  "https://detail.tmall.hk/*",
+  "http://localhost:8000/*",
+  "http://127.0.0.1:8000/*",
+  "https://www.xiaohongshu.com/*"
+],
   "background": {
     "service_worker": "assets/background.js",
     "type": "module"
