@@ -1,92 +1,315 @@
 # XHS-Product-Insight
 
-XHS-Product-Insight is a Python backend AI Agent project focused on product insight extraction from Xiaohongshu-style content. The system is designed to combine data acquisition, data preprocessing, multimodal analysis, and persistent storage into a unified backend pipeline.
+XHS-Product-Insight is a browser-extension-based product insight project. It identifies products from Taobao or Tmall pages, collects related Xiaohongshu notes and comments, and transforms unstructured user content into clear product insights through data cleaning, statistical analysis, and LLM-based information extraction.
+
+> Taobao and Tmall are used only for product identification.  
+> All review analysis data comes from Xiaohongshu notes and comments.
 
 ## Project Overview
 
-This project aims to build a backend service that can:
+Online product content often contains duplicated information, irrelevant discussion, promotional language, and scattered opinions. This project aims to organize Xiaohongshu content into structured and understandable insights that support users' purchase decisions.
 
-- collect product-related content from public sources;
-- preprocess raw text and images;
-- invoke LLM-based analysis for structured insights;
-- store processed data and results for downstream use.
-
-The current architecture is organized around a clear backend pipeline:
-
-1. Data acquisition
-2. Data preprocessing
-3. LLM analysis
-4. Persistence
-
-## Core Design Goals
-
-- modular backend design for easier maintenance and extension;
-- support for multimodal inputs, especially text plus image content;
-- a clean Service + Agent + Schema layering strategy;
-- simple deployment entry point via `main.py`.
-
-## Backend Project Structure
+The overall workflow is:
 
 ```text
-backend/
-├── app/
-│   ├── api/
-│   │   └── routes.py
-│   ├── agents/
-│   │   └── product_insight_agent.py
-│   ├── core/
-│   │   ├── config.py
-│   │   └── logger.py
-│   ├── data/
-│   │   ├── crawlers/
-│   │   │   └── xhs_client.py
-│   │   └── raw/
-│   ├── models/
-│   │   └── base.py
-│   ├── preprocess/
-│   │   ├── cleaner.py
-│   │   └── image_processor.py
-│   ├── schemas/
-│   │   └── request_models.py
-│   ├── services/
-│   │   ├── llm_service.py
-│   │   ├── persistence_service.py
-│   │   └── pipeline_service.py
-│   ├── storage/
-│   │   ├── db/
-│   │   └── objects/
-│   └── main.py
-└── tests/
-    ├── test_agents.py
-    └── test_preprocess.py
+Taobao/Tmall product page
+        ↓
+Product information extraction
+        ↓
+Xiaohongshu keyword generation
+        ↓
+Xiaohongshu notes and comments collection
+        ↓
+Data desensitization and cleaning
+        ↓
+LLM-based information extraction
+        ↓
+Structured data and statistical analysis
+        ↓
+Visualization and product insights
 ```
 
-## Module Responsibilities
+The final analysis is designed to include:
 
-- `api/`: exposes HTTP routes and API contracts for the backend.
-- `agents/`: contains AI Agent logic used for product insight reasoning and synthesis.
-- `core/`: runtime configuration, logging, shared settings, and environment handling.
-- `data/`: raw data acquisition layer, such as crawlers or data connectors.
-- `preprocess/`: text cleaning, image preprocessing, normalization, and multimodal preparation.
-- `schemas/`: request and response data models.
-- `services/`: business orchestration, LLM invocation, and persistence logic.
-- `storage/`: persistent storage directory for database files, object storage, or local artifacts.
+- collection statistics;
+- product attributes;
+- usage scenarios;
+- target user groups;
+- frequently mentioned advantages and disadvantages;
+- high-frequency keywords;
+- sentiment and risk distribution;
+- representative Xiaohongshu content;
+- personalized purchase recommendations.
 
-## Typical Execution Flow
+## Data Source Scope
 
-1. the API receives a request;
-2. the crawler or data acquisition component pulls source content;
-3. the preprocessing layer cleans text and processes images;
-4. the Agent or LLM service generates structured insight results;
-5. the persistence service stores final output for future retrieval.
+### Taobao and Tmall
+
+Taobao and Tmall pages provide basic product information such as:
+
+- product title;
+- brand and model, when available;
+- product ID;
+- product URL;
+- platform source.
+
+Taobao and Tmall reviews are not used in the review-analysis results.
+
+### Xiaohongshu
+
+Xiaohongshu is the only source of review-analysis data. The planned collection data includes:
+
+- note titles and text;
+- tags and publication time;
+- anonymized author identifiers;
+- engagement statistics;
+- comments;
+- collection metadata.
+
+## System Components
+
+| Component | Responsibility |
+|---|---|
+| Browser extension | Recognize products, accept user settings, start tasks, show progress, and display results |
+| Local crawler connector | Handle Xiaohongshu login, collect notes and comments, manage asynchronous tasks, and return desensitized structured data |
+| Analysis backend | Clean data, calculate statistics, invoke the LLM, apply preference-based scoring, and generate product insights |
+
+The backend implementation and final analysis API are still under development. This README therefore describes their responsibilities without assuming a specific framework, directory structure, or startup command.
+
+## Browser Extension
+
+The extension is currently designed for Taobao and Tmall product pages. Its responsibilities include:
+
+- detecting the current product page;
+- extracting available product information;
+- generating a default Xiaohongshu search query;
+- allowing the user to edit the query;
+- configuring collection limits;
+- checking the local service status;
+- starting login and collection tasks;
+- polling asynchronous task progress;
+- previewing structured collection data;
+- displaying Xiaohongshu-only analysis results;
+- applying user preference weights to scoring and ranking.
+
+The extension remains lightweight: it does not perform the crawler's login process, store authentication credentials, or run the complete LLM analysis pipeline itself.
+
+## Data Flow
+
+1. The user opens a supported Taobao or Tmall product page.
+2. The extension extracts the product information and generates a Xiaohongshu search query.
+3. The user may edit the query and collection limits.
+4. The extension starts a login or collection task through the local connector.
+5. The connector collects Xiaohongshu notes and comments and removes sensitive information.
+6. The extension polls the task and receives desensitized structured data.
+7. The structured data is sent to the analysis backend.
+8. The backend cleans the data, performs statistical analysis, and extracts insights with an LLM.
+9. The extension displays the final results and representative Xiaohongshu content.
+
+## Local Crawler Connector
+
+During development, the local service is expected to use:
+
+```text
+http://127.0.0.1:8000
+```
+
+Login and collection may take time, so both operations should run as asynchronous jobs. The connector should return a `job_id`, and the extension should poll for status instead of keeping one HTTP request open.
+
+The current proposed interface contract is:
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `POST` | `/api/v1/xhs/auth/login` | Start a Xiaohongshu login task |
+| `GET` | `/api/v1/xhs/auth/login/{job_id}` | Query the login task |
+| `GET` | `/api/v1/xhs/auth/status` | Query the current login status |
+| `POST` | `/api/v1/xhs/collections` | Start a collection task |
+| `GET` | `/api/v1/xhs/collections/{job_id}` | Query collection progress |
+| `GET` | `/api/v1/xhs/collections/{job_id}/result` | Retrieve the desensitized result |
+
+These endpoints are an integration proposal and may be adjusted when the backend contract is finalized.
+
+The crawler should receive only the product source and an optional user-edited search query:
+
+```json
+{
+  "source": "https://detail.tmall.com/...",
+  "query_override": "optional Xiaohongshu search query"
+}
+```
+
+User preference weights belong to the analysis layer and must not be sent to the crawler.
+
+## Structured Raw Data
+
+The connector should return desensitized structured raw data rather than an LLM summary or an unprocessed command-line dump. A high-level example is:
+
+```json
+{
+  "schema_version": "1.1",
+  "collected_at": "2026-07-22T00:00:00Z",
+  "input": {
+    "source": "taobao_or_tmall",
+    "query": "product keyword"
+  },
+  "collection": {
+    "note_count": 10,
+    "comment_count": 120
+  },
+  "notes": [
+    {
+      "title": "Example note title",
+      "text": "Example note content",
+      "tags": ["product", "review"],
+      "publish_time": "2026-07-20T00:00:00Z",
+      "author_id_hash": "anonymized-author-id",
+      "engagement": {
+        "likes": 0,
+        "collects": 0,
+        "comments": 0,
+        "shares": 0
+      },
+      "comments": []
+    }
+  ],
+  "errors": []
+}
+```
+
+The exact schema should be versioned and shared by the connector, analysis backend, and extension.
+
+## Data Security
+
+Sensitive authentication data must be removed before crawler results reach the extension or analysis backend.
+
+The system must not expose, store, or log:
+
+- cookies or request headers;
+- `a1`;
+- `web_session`;
+- `webId`;
+- `xsec_token`;
+- `xsec_source`;
+- QR-code authentication credentials;
+- authenticated URLs containing sensitive query parameters.
+
+Only publicly available content should be collected. Data acquisition and processing must comply with applicable laws, privacy requirements, research-ethics requirements, platform rules, and reasonable rate limits.
+
+## Mock and Real Modes
+
+The extension supports Mock mode so that frontend development and demonstrations can continue before the real connector and analysis backend are completed.
+
+### Mock Mode
+
+Mock mode simulates service connection, login, asynchronous collection, progress updates, structured data, and analysis results. Mock content must be clearly identified and must follow the Xiaohongshu-only review scope.
+
+### Real Mode
+
+Real mode connects to the local service. A real request failure should be shown clearly to the user and must not be silently replaced by a successful Mock result.
+
+## Project Structure
+
+The confirmed frontend structure includes:
+
+```text
+XHS-Product-Insight/
+├── extension/
+│   ├── mocks/
+│   ├── scripts/
+│   ├── src/
+│   ├── manifest.json
+│   ├── package.json
+│   ├── tsconfig.json
+│   └── vite.config.ts
+└── README.md
+```
+
+Backend and crawler directories will be documented after their implementation and interface contracts are confirmed.
+
+## Run the Browser Extension
+
+### Prerequisites
+
+- Node.js 18 or later;
+- npm;
+- Google Chrome or Microsoft Edge.
+
+Enter the extension directory and install dependencies:
+
+```bash
+cd extension
+npm install
+```
+
+Run type checking:
+
+```bash
+npm run typecheck
+```
+
+Build the extension:
+
+```bash
+npm run build
+```
+
+After the build succeeds:
+
+1. Open `chrome://extensions` or `edge://extensions`.
+2. Enable **Developer mode**.
+3. Select **Load unpacked**.
+4. Choose the generated `extension/dist` directory.
+5. Open a supported Taobao or Tmall product page.
+6. Refresh the page and open the extension side panel.
+
+After changing extension code, rebuild the project and reload the unpacked extension.
 
 ## Current Status
 
-This repository currently provides the initial project layout and sample backend modules to support continued development. The frontend is intentionally not described in detail because the interface form has not yet been finalized.
+### Available
 
-## Development Notes
+- browser extension foundation;
+- Taobao and Tmall page support;
+- product information extraction;
+- Mock service and analysis flows;
+- editable Xiaohongshu search query;
+- user preference settings, scoring, and ranking;
+- Xiaohongshu-only result presentation;
+- TypeScript type checking and production build scripts.
 
-- the backend is expected to be implemented using Python;
-- a FastAPI-style application entry point is provided through `backend/app/main.py`;
-- the current codebase focuses on backend structure and example modules rather than full production deployment.
+### In Progress
 
+- real local crawler connector;
+- asynchronous Xiaohongshu login and collection integration;
+- unified task states and error codes;
+- connector-side desensitization;
+- real analysis-backend contract;
+- complete frontend-to-backend integration.
+
+### Planned
+
+- data cleaning and deduplication;
+- spam and promotional-content detection;
+- statistical analysis;
+- LLM-based structured information extraction;
+- multimodal analysis where applicable;
+- personalized purchase recommendations;
+- persistent result storage;
+- end-to-end testing.
+
+## Known Limitations
+
+- The project is not yet production-ready.
+- Some current frontend flows use Mock data.
+- The backend implementation and final API schemas are not yet confirmed.
+- Product extraction may be affected by changes to Taobao or Tmall page structures.
+- Collection depends on a running local connector and a valid Xiaohongshu login state.
+- LLM-generated conclusions may require human validation and should not be treated as guaranteed facts.
+
+## Disclaimer
+
+This project is intended for educational and research purposes. It must not be used to bypass access controls, collect private content, expose authentication credentials, or perform unauthorized large-scale data acquisition.
+
+## License
+
+A license has not yet been specified.
