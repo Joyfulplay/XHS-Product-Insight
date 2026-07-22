@@ -1,4 +1,5 @@
 import { API_BASE_URL, CLIENT_VERSION, USE_MOCK } from "../config";
+import { apiPaths } from "./paths";
 import { mockApiClient } from "./mock_client";
 import type {
   AnalysisMode,
@@ -77,11 +78,11 @@ const realApiClient: TrustLensApiClient = {
   resolveProduct(page: PageProduct, signal?: AbortSignal): Promise<ResolveProductData> {
     const payload: ResolveProductRequest = { ...page, client_version: CLIENT_VERSION };
     const { supported: _supported, ...requestBody } = payload as ResolveProductRequest & { supported?: boolean };
-    return request("/api/v1/products/resolve", { method: "POST", body: JSON.stringify(requestBody) }, signal);
+    return request(apiPaths.products.resolve, { method: "POST", body: JSON.stringify(requestBody) }, signal);
   },
 
   getProductAnalysis(productId: string, options: { mode: AnalysisMode }, signal?: AbortSignal): Promise<ProductAnalysisData> {
-    return request(`/api/v1/products/${encodeURIComponent(productId)}/analysis?mode=${options.mode}`, { method: "GET" }, signal);
+    return request(apiPaths.products.analysis(productId, options.mode), { method: "GET" }, signal);
   },
 
   getEvidence(productId: string, query: EvidenceQuery, signal?: AbortSignal): Promise<EvidenceData> {
@@ -89,15 +90,15 @@ const realApiClient: TrustLensApiClient = {
     for (const [key, value] of Object.entries(query)) {
       if (value !== undefined) params.set(key, String(value));
     }
-    return request(`/api/v1/products/${encodeURIComponent(productId)}/evidence?${params}`, { method: "GET" }, signal);
+    return request(apiPaths.products.evidence(productId, String(params)), { method: "GET" }, signal);
   },
 
   createRefreshJob(productId: string, refreshRequest: RefreshRequest, signal?: AbortSignal): Promise<RefreshJobData> {
-    return request(`/api/v1/products/${encodeURIComponent(productId)}/refresh`, { method: "POST", body: JSON.stringify(refreshRequest) }, signal);
+    return request(apiPaths.products.refresh(productId), { method: "POST", body: JSON.stringify(refreshRequest) }, signal);
   },
 
   getRefreshJob(jobId: string, signal?: AbortSignal): Promise<RefreshJobData> {
-    return request(`/api/v1/jobs/${encodeURIComponent(jobId)}`, { method: "GET" }, signal);
+    return request(apiPaths.jobs.detail(jobId), { method: "GET" }, signal);
   },
 };
 

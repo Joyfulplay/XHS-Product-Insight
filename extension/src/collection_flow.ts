@@ -86,11 +86,15 @@ function crawlStageLabel(job: CrawlJobData): string {
   return ({
     idle: "等待开始",
     queued: "已排队",
-    crawling: "正在采集评论",
+    crawling: "正在采集笔记和评论",
+    cleaning: "正在清洗数据",
+    llm_extracting: "正在进行 LLM 抽取",
+    analyzing: "正在统计分析",
     formatting: "正在格式化数据",
     completed: "采集完成",
     failed: "采集失败",
     cancelled: "已取消",
+    timeout: "任务超时",
   })[job.status];
 }
 
@@ -107,8 +111,9 @@ export function renderCollectionFlow(
   preferences: PreferenceWeightsForCollection,
 ): string {
   const validation = validateCrawlReady(state);
-  const canStart = !validation && !["queued", "crawling", "formatting"].includes(state.crawlJob.status);
-  const isRunning = ["queued", "crawling", "formatting"].includes(state.crawlJob.status);
+  const runningStatuses = ["queued", "crawling", "cleaning", "llm_extracting", "analyzing", "formatting"];
+  const canStart = !validation && !runningStatuses.includes(state.crawlJob.status);
+  const isRunning = runningStatuses.includes(state.crawlJob.status);
   const progress = Math.round(state.crawlJob.progress * 100);
   const productName = product.title || product.model || product.brand || "暂未识别商品名称";
 
@@ -146,7 +151,8 @@ export function renderCollectionFlow(
     ${state.formError ? `<div class="form-error">${escapeHtml(state.formError)}</div>` : ""}
 
     <div class="collection-actions">
-      <button class="primary-button inline" id="start-crawl-button" ${canStart ? "" : "disabled"}>开始采集</button>
+      ${["failed", "timeout"].includes(state.crawlJob.status) ? `<button class="primary-button inline" id="start-crawl-button" ${validation ? "disabled" : ""}>重试</button>` : `<button class="primary-button inline" id="start-crawl-button" ${canStart ? "" : "disabled"}>开始采集</button>`}
+      ${state.crawlJob.status === "cancelled" ? `<button class="secondary-button" id="back-crawl-button">返回</button>` : ""}
       ${isRunning ? `<button class="secondary-button danger" id="cancel-crawl-button">取消采集</button>` : ""}
       ${validation && !isRunning ? `<small>${escapeHtml(validation)}</small>` : ""}
     </div>

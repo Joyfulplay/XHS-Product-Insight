@@ -1,6 +1,7 @@
 import "./sidepanel.css";
 import { ApiError, NetworkError, apiClient } from "./api/client";
 import { crawlerClient } from "./api/crawler_client";
+import { normalizeAnalysisResult } from "./analysis_view_model";
 import {
   clampInteger,
   createInitialCollectionFlowState,
@@ -388,40 +389,27 @@ function renderRisk(analysis: ProductAnalysisData): string {
 }
 
 function renderXhsAnalysisOverview(analysis: ProductAnalysisData): string {
-  const total = analysis.coverage.total_content_count;
-  const cleaned = Math.max(0, total - analysis.risk_summary.high_risk_count);
-  const topAspects = analysis.aspects.slice(0, 4).map((aspect) => aspect.aspect_label).join("、") || "暂无数据";
-  const strengths = analysis.aspects
-    .filter((aspect) => (aspect.trusted_sentiment_score ?? 0) >= 78)
-    .slice(0, 3)
-    .map((aspect) => aspect.aspect_label);
-  const weaknesses = analysis.aspects
-    .filter((aspect) => (aspect.trusted_sentiment_score ?? 100) < 72)
-    .slice(0, 3)
-    .map((aspect) => aspect.aspect_label);
-  const keywords = analysis.aspects
-    .slice()
-    .sort((a, b) => b.mention_count - a.mention_count)
-    .slice(0, 6)
-    .map((aspect) => aspect.aspect_label)
-    .join(" / ");
-  const suggestion = analysis.summaries.trust_aware.one_sentence_summary ?? "等待后端返回购买建议。";
+  const view = normalizeAnalysisResult(analysis);
   return `<section class="card xhs-result-card">
     <div class="section-heading"><div><span class="eyebrow">小红书评论分析</span><h2>分析结果</h2></div><small>仅基于小红书笔记与评论</small></div>
+    ${view.empty_message ? `<div class="status-banner warning">${escapeHtml(view.empty_message)}</div>` : ""}
+    ${view.sample.low_confidence ? `<div class="status-banner warning">当前样本量或置信度偏低，购买建议仅作初步参考。</div>` : ""}
     <div class="xhs-stat-grid">
-      <div><span>采集笔记数</span><strong>${Math.max(1, Math.round(total / 42)).toLocaleString("zh-CN")}</strong></div>
-      <div><span>原始评论数</span><strong>${total.toLocaleString("zh-CN")}</strong></div>
-      <div><span>清洗后有效评论数</span><strong>${cleaned.toLocaleString("zh-CN")}</strong></div>
+      <div><span>采集笔记数</span><strong>${view.sample.note_count.toLocaleString("zh-CN")}</strong></div>
+      <div><span>原始评论数</span><strong>${view.sample.raw_comment_count.toLocaleString("zh-CN")}</strong></div>
+      <div><span>清洗后有效评论数</span><strong>${view.sample.valid_comment_count.toLocaleString("zh-CN")}</strong></div>
       <div><span>风险内容占比</span><strong>${percent(analysis.risk_summary.high_risk_ratio)}</strong></div>
     </div>
     <div class="xhs-insight-list">
-      <p><strong>产品属性：</strong>${escapeHtml(topAspects)}</p>
-      <p><strong>使用场景：</strong>通勤、办公、日常佩戴等场景由后端从小红书评论中抽取。</p>
-      <p><strong>用户类型：</strong>预算敏感用户、通勤用户、长时间佩戴用户等由后端归纳。</p>
-      <p><strong>优点：</strong>${escapeHtml(strengths.length ? strengths.join("、") : "等待后端抽取")}</p>
-      <p><strong>缺点：</strong>${escapeHtml(weaknesses.length ? weaknesses.join("、") : "等待后端抽取")}</p>
-      <p><strong>购买建议：</strong>${text(suggestion)}</p>
-      <p><strong>高频关键词：</strong>${escapeHtml(keywords || "暂无数据")}</p>
+      <p><strong>总体评价：</strong>${escapeHtml(view.overall)}</p>
+      <p><strong>高频优点：</strong>${escapeHtml(view.strengths.length ? view.strengths.join("、") : "暂无高频优点")}</p>
+      <p><strong>高频缺点：</strong>${escapeHtml(view.weaknesses.length ? view.weaknesses.join("、") : "暂无高频缺点")}</p>
+      <p><strong>产品属性：</strong>${view.attributes.length ? view.attributes.map((item) => `${escapeHtml(item.name)}：${item.positive_mentions} 条正面提及，${item.negative_mentions} 条负面提及`).join("；") : "暂无数据"}</p>
+      <p><strong>使用场景：</strong>${escapeHtml(view.scenes.join("、"))}</p>
+      <p><strong>适用人群：</strong>${escapeHtml(view.suitable_users.join("、"))}</p>
+      <p><strong>不适用人群：</strong>${escapeHtml(view.unsuitable_users.join("、"))}</p>
+      <p><strong>购买建议：</strong>${escapeHtml(view.purchase_advice)}</p>
+      <p><strong>高频关键词：</strong>${escapeHtml(view.keywords.length ? view.keywords.join(" / ") : "暂无数据")}</p>
     </div>
   </section>`;
 }
@@ -503,6 +491,7 @@ function bindEvents(): void {
   document.querySelector<HTMLButtonElement>("#xhs-login-button")?.addEventListener("click", () => void connectXiaohongshu());
   document.querySelector<HTMLButtonElement>("#start-crawl-button")?.addEventListener("click", () => void startCrawl());
   document.querySelector<HTMLButtonElement>("#cancel-crawl-button")?.addEventListener("click", () => void cancelCrawl());
+  document.querySelector<HTMLButtonElement>("#back-crawl-button")?.addEventListener("click", resetCrawlTask);
   document.querySelector<HTMLButtonElement>("#submit-analysis-button")?.addEventListener("click", () => void submitFormattedPreview());
   document.querySelectorAll<HTMLButtonElement>("[data-demo-scenario]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -654,11 +643,13 @@ async function connectXiaohongshu(): Promise<void> {
   state.collection.submitMessage = null;
   render();
   try {
-    state.collection.login = await crawlerClient.startLogin(controller.signal);
+    const loginJob = await crawlerClient.startLogin("auto", controller.signal);
+    state.collection.login = { status: loginJob.status, message: loginJob.message ?? null };
     render();
     while (version === loginPollingVersion && ["opening_browser", "waiting_for_login"].includes(state.collection.login.status)) {
       await wait(650);
-      state.collection.login = await crawlerClient.getLoginStatus(controller.signal);
+      const nextLoginJob = await crawlerClient.getLoginJob(loginJob.job_id, controller.signal);
+      state.collection.login = { status: nextLoginJob.status, message: nextLoginJob.message ?? null };
       state.collection.formError = validateCrawlReady(state.collection);
       render();
       if (state.collection.login.status === "logged_in") break;
@@ -687,13 +678,16 @@ async function startCrawl(): Promise<void> {
   try {
     state.collection.crawlJob = await crawlerClient.startCrawl(request, controller.signal);
     render();
-    while (version === crawlPollingVersion && state.collection.crawlJob.job_id && ["queued", "crawling", "formatting"].includes(state.collection.crawlJob.status)) {
+    while (version === crawlPollingVersion && state.collection.crawlJob.job_id && ["queued", "crawling", "cleaning", "llm_extracting", "analyzing", "formatting"].includes(state.collection.crawlJob.status)) {
       await wait(750);
       state.collection.crawlJob = await crawlerClient.getCrawlJob(state.collection.crawlJob.job_id, controller.signal);
       render();
     }
     if (version === crawlPollingVersion && state.collection.crawlJob.status === "completed") {
       state.collection.formattedPreview = crawlerClient.createFormattedPreview(request, state.collection.crawlJob);
+      render();
+    } else if (version === crawlPollingVersion && state.collection.crawlJob.status === "timeout") {
+      state.collection.crawlJob.error_message = state.collection.crawlJob.error_message ?? "任务超时，请重试。";
       render();
     }
   } catch (error: unknown) {
@@ -725,6 +719,14 @@ async function cancelCrawl(): Promise<void> {
     state.collection.crawlJob = { ...state.collection.crawlJob, status: "cancelled", stage: "cancelled" };
   }
   state.collection.formattedPreview = null;
+  render();
+}
+
+function resetCrawlTask(): void {
+  crawlPollingVersion += 1;
+  state.collection.crawlJob = { job_id: null, status: "idle", stage: "waiting", progress: 0, collected_notes: 0, collected_comments: 0, error_message: null };
+  state.collection.formattedPreview = null;
+  state.collection.submitMessage = null;
   render();
 }
 
@@ -783,6 +785,14 @@ async function initialize(): Promise<void> {
       state.view = "unsupported";
       render();
       return;
+    }
+    const productChanged = state.pageProduct?.page_url !== page.page_url || state.pageProduct?.source_product_id !== page.source_product_id;
+    if (productChanged) {
+      crawlPollingVersion += 1;
+      loginPollingVersion += 1;
+      state.collection.crawlJob = { job_id: null, status: "idle", stage: "waiting", progress: 0, collected_notes: 0, collected_comments: 0, error_message: null };
+      state.collection.formattedPreview = null;
+      state.collection.submitMessage = null;
     }
     state.pageProduct = page;
     if (!state.collection.keywordTouched) {

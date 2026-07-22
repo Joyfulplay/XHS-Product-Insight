@@ -253,13 +253,34 @@ export interface XiaohongshuLoginState {
   message: string | null;
 }
 
+export type BrowserChoice = "auto" | "edge" | "chrome";
+
+export interface AuthStatusResponse {
+  service_status?: CrawlerServiceStatus;
+  login_status?: XiaohongshuLoginStatus;
+  message?: string | null;
+}
+
+export interface LoginStartResponse {
+  job_id: string;
+  status: XiaohongshuLoginStatus;
+  message?: string | null;
+}
+
+export interface LoginJobResponse {
+  job_id: string;
+  status: XiaohongshuLoginStatus;
+  progress?: number | null;
+  message?: string | null;
+}
+
 export interface CrawlConfig {
   max_notes: number;
   max_comments_per_note: number;
 }
 
-export type CrawlJobStatus = "idle" | "queued" | "crawling" | "formatting" | "completed" | "failed" | "cancelled";
-export type CrawlJobStage = "waiting" | "crawling_notes" | "formatting_dataset" | "completed" | "failed" | "cancelled";
+export type CrawlJobStatus = "idle" | "queued" | "crawling" | "cleaning" | "llm_extracting" | "analyzing" | "formatting" | "completed" | "failed" | "cancelled" | "timeout";
+export type CrawlJobStage = "waiting" | "crawling_notes" | "cleaning_data" | "llm_extracting" | "statistical_analysis" | "formatting_dataset" | "completed" | "failed" | "cancelled" | "timeout";
 
 export interface CrawlJobData {
   job_id: string | null;
@@ -276,6 +297,70 @@ export interface CrawlStartRequest {
   page_product: PageProduct;
   preferences: Record<string, number>;
   config: CrawlConfig;
+}
+
+export interface CollectionStartResponse {
+  job_id: string;
+  status: CrawlJobStatus;
+  stage?: CrawlJobStage;
+  progress?: number | null;
+  message?: string | null;
+}
+
+export interface CollectionJobResponse {
+  job_id: string;
+  status: CrawlJobStatus;
+  stage?: CrawlJobStage;
+  progress?: number | null;
+  collected_notes?: number | null;
+  collected_comments?: number | null;
+  message?: string | null;
+  error_message?: string | null;
+}
+
+export interface CollectionResultResponse {
+  job_id: string;
+  raw?: unknown;
+  formatted_preview?: FormattedCrawlerDataPreview | null;
+  analysis?: unknown;
+}
+
+export interface AnalysisEvidenceViewModel {
+  title: string;
+  author: string | null;
+  quote: string | null;
+  publish_time: string | null;
+  relevance_score: number | null;
+  risk_score: number | null;
+  source_url: string | null;
+}
+
+export interface ProductAttributeViewModel {
+  name: string;
+  positive_mentions: number;
+  negative_mentions: number;
+}
+
+export interface AnalysisViewModel {
+  sample: {
+    note_count: number;
+    raw_comment_count: number;
+    valid_comment_count: number;
+    confidence: number | null;
+    low_confidence: boolean;
+  };
+  overall: string;
+  strengths: string[];
+  weaknesses: string[];
+  attributes: ProductAttributeViewModel[];
+  scenes: string[];
+  suitable_users: string[];
+  unsuitable_users: string[];
+  purchase_advice: string;
+  keywords: string[];
+  risk_reasons: RiskReason[];
+  evidence: AnalysisEvidenceViewModel[];
+  empty_message: string | null;
 }
 
 export interface FormattedCrawlerDataPreview {
