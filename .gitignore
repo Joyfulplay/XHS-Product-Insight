@@ -226,3 +226,23 @@ __marimo__/
 
 # Local raw crawler outputs (the directory itself is retained with .gitkeep)
 data/raw/*.json
+
+# 1. 依赖包（npm install 产生）
+node_modules/
+
+# 2. 构建产物（npm build 产生，根据你的构建工具可能是 dist、build 或 out）
+dist/
+build/
+out/
+
+# 3. 各种缓存和日志文件
+.eslintcache
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# 4. Vite / Webpack / Next.js 等工具的本地临时缓存
+.vite/
+.next/
+.cache/
