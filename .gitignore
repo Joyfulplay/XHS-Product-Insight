@@ -223,3 +223,6 @@ __marimo__/
 
 # Local browser profiles and login sessions
 .runtime/
+
+# Local raw crawler outputs (the directory itself is retained with .gitkeep)
+data/raw/*.json
