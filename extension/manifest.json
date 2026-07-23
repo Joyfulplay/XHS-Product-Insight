@@ -10,7 +10,8 @@
     "https://chaoshi.detail.tmall.com/*",
     "https://detail.m.tmall.com/*",
     "https://detail.tmall.hk/*",
-    "http://localhost:8000/*"
+    "http://localhost:8000/*",
+    "http://127.0.0.1:8000/*"
   ],
   "background": {
     "service_worker": "assets/background.js",
