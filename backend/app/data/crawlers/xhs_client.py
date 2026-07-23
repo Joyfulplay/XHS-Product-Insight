@@ -34,6 +34,8 @@ from urllib.parse import parse_qs, unquote, urljoin, urlparse
 
 XHS_HOME = "https://www.xiaohongshu.com"
 SCHEMA_VERSION = "1.1"
+PROJECT_ROOT = Path(__file__).resolve().parents[4]
+DEFAULT_RAW_DATA_DIR = PROJECT_ROOT / "data" / "raw"
 SEARCH_PAGE_SIZE = 20
 COMMENT_PAGE_LIMIT = 3
 LOGIN_TIMEOUT_SECONDS = 300
@@ -1233,7 +1235,7 @@ def default_output_path() -> Path:
     """生成带时间戳的默认输出文件名，避免覆盖上一次结果。"""
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return Path(f"xhs_dataset_{stamp}.json")
+    return DEFAULT_RAW_DATA_DIR / f"xhs_dataset_{stamp}.json"
 
 
 def write_dataset(path: Path, dataset: dict[str, Any]) -> None:

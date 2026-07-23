@@ -227,10 +227,10 @@ macOS / Linux 使用相同参数，只需将 Python 路径改为 `./.venv/bin/py
 
 ## 9. 输出数据
 
-未指定 `--output` 时，脚本会在当前工作目录生成：
+未指定 `--output` 时，脚本会在项目根目录的 `data/raw/` 中生成：
 
 ```text
-xhs_dataset_年月日_时分秒.json
+data/raw/xhs_dataset_年月日_时分秒.json
 ```
 
 数据集主要包含：
