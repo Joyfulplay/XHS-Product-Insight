@@ -628,6 +628,7 @@ function bindEvents(): void {
     state.collection.formError = validateCrawlReady(state.collection);
     render();
   });
+  document.querySelector<HTMLButtonElement>("#backend-connect-button")?.addEventListener("click", () => void connectBackendOneClick());
   document.querySelector<HTMLButtonElement>("#crawler-check-button")?.addEventListener("click", () => void checkCrawlerService());
   document.querySelector<HTMLButtonElement>("#xhs-login-button")?.addEventListener("click", () => void connectXiaohongshu());
   document.querySelector<HTMLButtonElement>("#start-crawl-button")?.addEventListener("click", () => void startCrawl());
@@ -878,10 +879,12 @@ function currentCrawlRequest(): CrawlStartRequest | null {
   };
 }
 
-async function checkCrawlerService(): Promise<void> {
-  state.collection.service = { status: "checking", checked_at: null, message: "正在检测本地采集服务" };
-  state.collection.formError = null;
-  render();
+async function checkCrawlerService(options: { renderStart?: boolean } = {}): Promise<void> {
+  if (options.renderStart !== false) {
+    state.collection.service = { status: "checking", checked_at: null, message: "正在检测本地采集服务" };
+    state.collection.formError = null;
+    render();
+  }
   try {
     if (USE_MOCK) {
       state.collection.service = await crawlerClient.checkService(controller.signal);
@@ -916,6 +919,35 @@ async function checkCrawlerService(): Promise<void> {
     state.collection.service = { status: "not_started", checked_at: new Date().toISOString(), message: "无法连接服务：后端未启动或网络不可达" };
   } finally {
     state.collection.formError = validateCrawlReady(state.collection);
+    render();
+  }
+}
+
+async function connectBackendOneClick(): Promise<void> {
+  if (state.collection.backendConnecting) return;
+  state.collection.backendConnecting = true;
+  state.collection.submitMessage = null;
+  state.collection.formError = null;
+  state.collection.service = { status: "checking", checked_at: null, message: "正在检测本地 FastAPI 后端" };
+  render();
+  try {
+    await checkCrawlerService({ renderStart: false });
+    if (state.collection.service.status !== "connected") {
+      state.collection.formError = "后端还没有启动。请先运行提示中的 uvicorn 命令，或双击 Start-XHS-Backend.bat，再点击检查连接状态。";
+      return;
+    }
+    if (state.collection.login.status === "logged_in") {
+      state.collection.submitMessage = "后端与小红书登录状态已准备好，可以开始采集。";
+      return;
+    }
+    await connectXiaohongshu();
+  } catch (error: unknown) {
+    if (error instanceof DOMException && error.name === "AbortError") return;
+    state.collection.service = { status: "not_started", checked_at: new Date().toISOString(), message: collectionErrorMessage(error) || "连接检查失败" };
+    state.collection.formError = "连接检查失败。请确认后端已启动，然后重试。";
+  } finally {
+    state.collection.backendConnecting = false;
+    state.collection.formError = state.collection.formError ?? validateCrawlReady(state.collection);
     render();
   }
 }
