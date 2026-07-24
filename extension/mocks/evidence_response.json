@@ -1,9 +1,9 @@
 {
   "data": {
     "items": [
-      { "content_id": "ev_1", "platform": "bilibili", "source_title": "使用 30 天后的真实体验", "quote": "地铁低频噪声基本能被压住，但人声仍然会听到一些。", "context_text": "作者在地铁、办公室和街道三个场景连续测试。", "source_url": "https://www.bilibili.com/", "publish_time": "2026-06-21T09:30:00+08:00", "sentiment": "positive", "risk_score": 0.08, "risk_level": "low" },
-      { "content_id": "ev_2", "platform": "xiaohongshu", "source_title": "两周通勤佩戴记录", "quote": "音质耐听，不过戴两个小时后头梁会有一点压迫感。", "context_text": "普通用户记录了两周工作日通勤体验。", "source_url": "https://www.xiaohongshu.com/", "publish_time": "2026-06-18T14:10:00+08:00", "sentiment": "neutral", "risk_score": 0.16, "risk_level": "low" },
-      { "content_id": "ev_3", "platform": "taobao", "source_title": "已购用户评价", "quote": "续航够用一周，通话遇到大风时对方听得不太清楚。", "context_text": null, "source_url": "https://item.taobao.com/", "publish_time": "2026-06-12T20:05:00+08:00", "sentiment": "neutral", "risk_score": 0.34, "risk_level": "medium" }
+      { "content_id": "ev_1", "platform": "xiaohongshu", "source_title": "Mock 使用 30 天后的真实体验", "quote": "地铁低频噪声基本能被压住，但人声仍然会听到一些。", "context_text": "小红书作者在地铁、办公室和街道三个场景连续测试。", "source_url": "https://www.xiaohongshu.com/explore/mock-note-1", "publish_time": "2026-06-21T09:30:00+08:00", "sentiment": "positive", "risk_score": 0.08, "risk_level": "low" },
+      { "content_id": "ev_2", "platform": "xiaohongshu", "source_title": "Mock 两周通勤佩戴记录", "quote": "音质耐听，不过戴两个小时后头梁会有一点压迫感。", "context_text": "普通用户记录了两周工作日通勤体验。", "source_url": "https://www.xiaohongshu.com/explore/mock-note-2", "publish_time": "2026-06-18T14:10:00+08:00", "sentiment": "neutral", "risk_score": 0.16, "risk_level": "low" },
+      { "content_id": "ev_3", "platform": "xiaohongshu", "source_title": "Mock 续航和通话评论摘录", "quote": "续航够用一周，通话遇到大风时对方听得不太清楚。", "context_text": null, "source_url": "https://www.xiaohongshu.com/explore/mock-note-3", "publish_time": "2026-06-12T20:05:00+08:00", "sentiment": "neutral", "risk_score": 0.34, "risk_level": "medium" }
     ],
     "next_cursor": null
   },
