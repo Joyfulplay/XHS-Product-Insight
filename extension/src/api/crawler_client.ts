@@ -4,6 +4,7 @@ import { apiPaths } from "./paths";
 import type {
   AuthStatusResponse,
   BrowserChoice,
+  CrawlConfig,
   CrawlJobData,
   CrawlStartRequest,
   CrawlerServiceState,
@@ -23,7 +24,7 @@ export interface CrawlerApiClient {
   startLogin(browser?: BrowserChoice, force?: boolean, signal?: AbortSignal): Promise<LoginStartResponse>;
   getLoginJob(jobId: string, signal?: AbortSignal): Promise<LoginJobResponse>;
   getLoginStatus(signal?: AbortSignal): Promise<XiaohongshuLoginState>;
-  startCollection(source: PageProduct, queryOverride?: string, signal?: AbortSignal): Promise<CollectionStartResponse>;
+  startCollection(source: PageProduct, queryOverride?: string, config?: CrawlConfig, signal?: AbortSignal): Promise<CollectionStartResponse>;
   getCollectionJob(jobId: string, signal?: AbortSignal): Promise<CollectionJobResponse>;
   getCollectionResult(jobId: string, signal?: AbortSignal): Promise<CollectionResultResponse>;
   startCrawl(request: CrawlStartRequest, signal?: AbortSignal): Promise<CrawlJobData>;
@@ -115,8 +116,8 @@ const mockCrawlerClient: CrawlerApiClient = {
     return { status: job.status, message: job.message ?? null };
   },
 
-  async startCollection(source: PageProduct, queryOverride?: string, signal?: AbortSignal): Promise<CollectionStartResponse> {
-    const job = await this.startCrawl({ keyword: queryOverride?.trim() || source.title || "", page_product: source, preferences: {}, config: { max_notes: 10, max_comments_per_note: 20 } }, signal);
+  async startCollection(source: PageProduct, queryOverride?: string, config: CrawlConfig = { max_notes: 10, max_comments_per_note: 20 }, signal?: AbortSignal): Promise<CollectionStartResponse> {
+    const job = await this.startCrawl({ keyword: queryOverride?.trim() || source.title || "", page_product: source, preferences: {}, config }, signal);
     return { ...job, job_id: job.job_id ?? `mock-crawl-${Date.now()}` };
   },
 
@@ -243,10 +244,22 @@ const realCrawlerClient: CrawlerApiClient = {
     return loginStateFromAuthStatus(status);
   },
 
-  startCollection(source: PageProduct, queryOverride?: string, signal?: AbortSignal): Promise<CollectionStartResponse> {
+  startCollection(source: PageProduct, queryOverride?: string, config?: CrawlConfig, signal?: AbortSignal): Promise<CollectionStartResponse> {
     const title = source.title?.trim() ?? "";
     const query = queryOverride?.trim() || title;
-    return requestJson(apiPaths.crawler.collection, { method: "POST", body: JSON.stringify({ source: query || source.page_url, query_override: query || null }) }, signal);
+    return requestJson(
+      apiPaths.crawler.collection,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          source: query || source.page_url,
+          query_override: query || null,
+          max_notes: config?.max_notes ?? 10,
+          max_comments_per_note: config?.max_comments_per_note ?? 20,
+        }),
+      },
+      signal,
+    );
   },
 
   getCollectionJob(jobId: string, signal?: AbortSignal): Promise<CollectionJobResponse> {
@@ -258,7 +271,7 @@ const realCrawlerClient: CrawlerApiClient = {
   },
 
   async startCrawl(request: CrawlStartRequest, signal?: AbortSignal): Promise<CrawlJobData> {
-    return crawlJobFromCollection(await this.startCollection(request.page_product, request.keyword, signal));
+    return crawlJobFromCollection(await this.startCollection(request.page_product, request.keyword, request.config, signal));
   },
 
   async getCrawlJob(jobId: string, signal?: AbortSignal): Promise<CrawlJobData> {

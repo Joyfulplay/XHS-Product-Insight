@@ -142,6 +142,8 @@ class LoginRequest(BaseModel):
 class CollectionRequest(BaseModel):
     source: str = Field(min_length=1, max_length=2_000)
     query_override: str | None = Field(default=None, max_length=300)
+    max_notes: int = Field(default=10, ge=1, le=50)
+    max_comments_per_note: int = Field(default=20, ge=0, le=100)
 
     @field_validator("source")
     @classmethod
@@ -264,12 +266,18 @@ class XhsConnectorService:
         self._auth_cache_at = 0.0
         self._auth_lock = RLock()
 
-    def _build_scraper(self, browser: BrowserName = "auto") -> XiaohongshuScraper:
+    def _build_scraper(
+        self,
+        browser: BrowserName = "auto",
+        *,
+        max_notes: int | None = None,
+        max_comments: int | None = None,
+    ) -> XiaohongshuScraper:
         return XiaohongshuScraper(
             profile_dir=self.settings.profile_dir,
             max_candidates=self.settings.max_candidates,
-            max_notes=self.settings.max_notes,
-            max_comments=self.settings.max_comments,
+            max_notes=self.settings.max_notes if max_notes is None else max_notes,
+            max_comments=self.settings.max_comments if max_comments is None else max_comments,
             min_note_likes=self.settings.min_note_likes,
             min_comment_likes=self.settings.min_comment_likes,
             delay=self.settings.delay,
@@ -308,15 +316,19 @@ class XhsConnectorService:
             raise ValueError(existing["job_id"])
         job = self.jobs.create("collection")
         self._futures[job["job_id"]] = self.executor.submit(
-            self._run_collection, job["job_id"], request.source, request.query_override
+            self._run_collection, job["job_id"], request
         )
         return job
 
-    def _run_collection(self, job_id: str, source: str, query_override: str | None) -> None:
+    def _run_collection(self, job_id: str, request: CollectionRequest) -> None:
         self.jobs.update(job_id, status="running", stage="collecting", progress=0.1)
         try:
             self.auth_status(refresh=True, require_authenticated=True)
-            dataset = self._build_scraper().collect(source, query_override=query_override)
+            scraper = self._build_scraper(
+                max_notes=request.max_notes,
+                max_comments=request.max_comments_per_note,
+            )
+            dataset = scraper.collect(request.source, query_override=request.query_override)
             result = normalize_collection_dataset(dataset)
             self.jobs.update(job_id, stage="cleaning", progress=0.55)
             analysis_result = self.analysis_pipeline.run(result).model_dump(mode="json")
