@@ -48,6 +48,40 @@ function previewFrom(request: CrawlStartRequest, job: CrawlJobData): FormattedCr
   };
 }
 
+function errorText(error: unknown): string | null {
+  if (typeof error === "string") return error;
+  if (error && typeof error === "object" && "message" in error) return String((error as { message: unknown }).message);
+  return null;
+}
+
+function crawlJobFromCollection(job: CollectionStartResponse | CollectionJobResponse, fallbackJobId: string | null = null): CrawlJobData {
+  const status = job.status === "succeeded" ? "completed" : job.status;
+  const errorValue = "error_message" in job ? job.error_message : null;
+  const errorMessage = typeof errorValue === "string" ? errorValue : errorText(job.error);
+  return {
+    job_id: job.job_id ?? fallbackJobId,
+    status,
+    stage: job.stage ?? status,
+    progress: job.progress ?? (status === "completed" ? 1 : 0),
+    collected_notes: "collected_notes" in job ? (job.collected_notes ?? 0) : 0,
+    collected_comments: "collected_comments" in job ? (job.collected_comments ?? 0) : 0,
+    error_message: errorMessage ?? job.message ?? null,
+    message: job.message ?? null,
+  };
+}
+
+function loginStateFromAuthStatus(status: AuthStatusResponse): XiaohongshuLoginState {
+  if (status.authenticated === true) return { status: "logged_in", message: status.message ?? "已登录" };
+  return { status: status.status === "unavailable" ? "error" : (status.login_status ?? "not_logged_in"), message: errorText(status.error) ?? status.message ?? null };
+}
+
+function assertLoginJob(response: LoginStartResponse): LoginStartResponse {
+  if (!response.job_id || typeof response.job_id !== "string") {
+    throw new Error("登录任务创建失败：后端未返回 job_id");
+  }
+  return response;
+}
+
 const mockCrawlerClient: CrawlerApiClient = {
   async checkService(signal?: AbortSignal): Promise<CrawlerServiceState> {
     await delay(300, signal);
@@ -197,7 +231,7 @@ const realCrawlerClient: CrawlerApiClient = {
   },
 
   startLogin(browser: BrowserChoice = "auto", signal?: AbortSignal): Promise<LoginStartResponse> {
-    return requestJson(apiPaths.crawler.login, { method: "POST", body: JSON.stringify({ browser }) }, signal);
+    return requestJson<LoginStartResponse>(apiPaths.crawler.login, { method: "POST", body: JSON.stringify({ browser }) }, signal).then(assertLoginJob);
   },
 
   getLoginJob(jobId: string, signal?: AbortSignal): Promise<LoginJobResponse> {
@@ -206,11 +240,13 @@ const realCrawlerClient: CrawlerApiClient = {
 
   async getLoginStatus(signal?: AbortSignal): Promise<XiaohongshuLoginState> {
     const status = await this.getAuthStatus(signal);
-    return { status: status.login_status ?? "error", message: status.message ?? null };
+    return loginStateFromAuthStatus(status);
   },
 
   startCollection(source: PageProduct, queryOverride?: string, signal?: AbortSignal): Promise<CollectionStartResponse> {
-    return requestJson(apiPaths.crawler.collection, { method: "POST", body: JSON.stringify({ source, query_override: queryOverride ?? null }) }, signal);
+    const title = source.title?.trim() ?? "";
+    const query = queryOverride?.trim() || title;
+    return requestJson(apiPaths.crawler.collection, { method: "POST", body: JSON.stringify({ source: query || source.page_url, query_override: query || null }) }, signal);
   },
 
   getCollectionJob(jobId: string, signal?: AbortSignal): Promise<CollectionJobResponse> {
@@ -221,12 +257,12 @@ const realCrawlerClient: CrawlerApiClient = {
     return requestJson(apiPaths.crawler.collectionResult(jobId), {}, signal);
   },
 
-  startCrawl(request: CrawlStartRequest, signal?: AbortSignal): Promise<CrawlJobData> {
-    return requestJson(apiPaths.crawler.collection, { method: "POST", body: JSON.stringify(request) }, signal);
+  async startCrawl(request: CrawlStartRequest, signal?: AbortSignal): Promise<CrawlJobData> {
+    return crawlJobFromCollection(await this.startCollection(request.page_product, request.page_product.title ?? request.keyword, signal));
   },
 
-  getCrawlJob(jobId: string, signal?: AbortSignal): Promise<CrawlJobData> {
-    return requestJson(apiPaths.crawler.collectionJob(jobId), {}, signal);
+  async getCrawlJob(jobId: string, signal?: AbortSignal): Promise<CrawlJobData> {
+    return crawlJobFromCollection(await this.getCollectionJob(jobId, signal), jobId);
   },
 
   cancelCrawl(jobId: string, signal?: AbortSignal): Promise<CrawlJobData> {

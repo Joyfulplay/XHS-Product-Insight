@@ -3,7 +3,7 @@
   "name": "TrustLens",
   "description": "小红书评论可信风险感知分析",
   "version": "0.1.0",
-  "permissions": ["sidePanel", "activeTab"],
+  "permissions": ["sidePanel", "activeTab", "storage"],
   "host_permissions": [
   "https://item.taobao.com/*",
   "https://detail.tmall.com/*",

@@ -239,6 +239,10 @@ export type XiaohongshuLoginStatus =
   | "opening_browser"
   | "waiting_for_login"
   | "logged_in"
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed"
   | "expired"
   | "error";
 
@@ -258,13 +262,17 @@ export type BrowserChoice = "auto" | "edge" | "chrome";
 export interface AuthStatusResponse {
   service_status?: CrawlerServiceStatus;
   login_status?: XiaohongshuLoginStatus;
+  authenticated?: boolean;
+  status?: "authenticated" | "unauthenticated" | "unavailable";
   message?: string | null;
+  error?: string | { code?: string; message?: string } | null;
 }
 
 export interface LoginStartResponse {
   job_id: string;
-  status: XiaohongshuLoginStatus;
+  status?: XiaohongshuLoginStatus;
   message?: string | null;
+  error?: string | { code?: string; message?: string } | null;
 }
 
 export interface LoginJobResponse {
@@ -272,6 +280,7 @@ export interface LoginJobResponse {
   status: XiaohongshuLoginStatus;
   progress?: number | null;
   message?: string | null;
+  error?: string | { code?: string; message?: string } | null;
 }
 
 export interface CrawlConfig {
@@ -279,8 +288,25 @@ export interface CrawlConfig {
   max_comments_per_note: number;
 }
 
-export type CrawlJobStatus = "idle" | "queued" | "crawling" | "cleaning" | "llm_extracting" | "analyzing" | "formatting" | "completed" | "failed" | "cancelled" | "timeout";
-export type CrawlJobStage = "waiting" | "crawling_notes" | "cleaning_data" | "llm_extracting" | "statistical_analysis" | "formatting_dataset" | "completed" | "failed" | "cancelled" | "timeout";
+export type CrawlJobStatus =
+  | "idle"
+  | "backend_disconnected"
+  | "auth_required"
+  | "waiting_login"
+  | "ready"
+  | "queued"
+  | "running"
+  | "crawling"
+  | "cleaning"
+  | "llm_extracting"
+  | "analyzing"
+  | "formatting"
+  | "succeeded"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "timeout";
+export type CrawlJobStage = string;
 
 export interface CrawlJobData {
   job_id: string | null;
@@ -290,6 +316,7 @@ export interface CrawlJobData {
   collected_notes: number;
   collected_comments: number;
   error_message: string | null;
+  message?: string | null;
 }
 
 export interface CrawlStartRequest {
@@ -300,15 +327,16 @@ export interface CrawlStartRequest {
 }
 
 export interface CollectionStartResponse {
-  job_id: string;
+  job_id?: string;
   status: CrawlJobStatus;
   stage?: CrawlJobStage;
   progress?: number | null;
   message?: string | null;
+  error?: string | { code?: string; message?: string } | null;
 }
 
 export interface CollectionJobResponse {
-  job_id: string;
+  job_id?: string;
   status: CrawlJobStatus;
   stage?: CrawlJobStage;
   progress?: number | null;
@@ -316,6 +344,7 @@ export interface CollectionJobResponse {
   collected_comments?: number | null;
   message?: string | null;
   error_message?: string | null;
+  error?: string | { code?: string; message?: string } | null;
 }
 
 export interface CollectionResultResponse {
@@ -323,6 +352,8 @@ export interface CollectionResultResponse {
   raw?: unknown;
   formatted_preview?: FormattedCrawlerDataPreview | null;
   analysis?: unknown;
+  data?: unknown;
+  result?: unknown;
 }
 
 export interface AnalysisEvidenceViewModel {
@@ -337,15 +368,18 @@ export interface AnalysisEvidenceViewModel {
 
 export interface ProductAttributeViewModel {
   name: string;
-  positive_mentions: number;
-  negative_mentions: number;
+  positive_mentions: number | null;
+  negative_mentions: number | null;
 }
 
 export interface AnalysisViewModel {
   sample: {
     note_count: number;
-    raw_comment_count: number;
-    valid_comment_count: number;
+    raw_comment_count: number | null;
+    valid_comment_count: number | null;
+    risk_negative_ratio: number | null;
+    sentiment_distribution: { positive: number | null; neutral: number | null; negative: number | null } | null;
+    analysis_source: string | null;
     confidence: number | null;
     low_confidence: boolean;
   };

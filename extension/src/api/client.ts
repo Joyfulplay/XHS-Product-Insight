@@ -15,7 +15,6 @@ import type {
   RefreshJobData,
   RefreshRequest,
   ResolveProductData,
-  ResolveProductRequest,
 } from "./types";
 
 export interface TrustLensApiClient {
@@ -75,10 +74,20 @@ async function request<T>(path: string, init: RequestInit, signal?: AbortSignal)
 }
 
 const realApiClient: TrustLensApiClient = {
-  resolveProduct(page: PageProduct, signal?: AbortSignal): Promise<ResolveProductData> {
-    const payload: ResolveProductRequest = { ...page, client_version: CLIENT_VERSION };
-    const { supported: _supported, ...requestBody } = payload as ResolveProductRequest & { supported?: boolean };
-    return request(apiPaths.products.resolve, { method: "POST", body: JSON.stringify(requestBody) }, signal);
+  async resolveProduct(page: PageProduct, _signal?: AbortSignal): Promise<ResolveProductData> {
+    return {
+      product: {
+        product_id: page.source_product_id ?? page.page_url,
+        canonical_name: page.title ?? "当前商品",
+        brand: page.brand,
+        model: page.model,
+        display_image_url: null,
+      },
+      match_status: "page_title",
+      match_confidence: null,
+      requires_user_confirmation: false,
+      candidates: [],
+    };
   },
 
   getProductAnalysis(productId: string, options: { mode: AnalysisMode }, signal?: AbortSignal): Promise<ProductAnalysisData> {

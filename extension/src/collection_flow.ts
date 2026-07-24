@@ -17,6 +17,7 @@ export interface CollectionFlowState {
   config: CrawlConfig;
   crawlJob: CrawlJobData;
   formattedPreview: FormattedCrawlerDataPreview | null;
+  starting: boolean;
   submitting: boolean;
   submitMessage: string | null;
   formError: string | null;
@@ -31,6 +32,7 @@ export function createInitialCollectionFlowState(): CollectionFlowState {
     config: { max_notes: 10, max_comments_per_note: 20 },
     crawlJob: { job_id: null, status: "idle", stage: "waiting", progress: 0, collected_notes: 0, collected_comments: 0, error_message: null },
     formattedPreview: null,
+    starting: false,
     submitting: false,
     submitMessage: null,
     formError: null,
@@ -64,7 +66,7 @@ function escapeHtml(value: string): string {
 }
 
 function statusDot(status: string): string {
-  return status === "connected" || status === "logged_in" || status === "completed" ? "ok" : status === "not_started" || status === "error" || status === "failed" || status === "expired" ? "bad" : "busy";
+  return status === "connected" || status === "logged_in" || status === "ready" || status === "completed" || status === "succeeded" ? "ok" : status === "not_started" || status === "backend_disconnected" || status === "auth_required" || status === "error" || status === "failed" || status === "expired" ? "bad" : "busy";
 }
 
 function serviceLabel(status: CrawlerServiceState["status"]): string {
@@ -76,26 +78,37 @@ function loginLabel(status: XiaohongshuLoginState["status"]): string {
     not_logged_in: "未连接",
     opening_browser: "正在打开浏览器",
     waiting_for_login: "等待扫码",
-    logged_in: "已连接小红书",
+    logged_in: "已登录",
+    queued: "登录任务排队中",
+    running: "等待登录完成",
+    succeeded: "登录已确认",
+    failed: "登录失败",
     expired: "登录已过期",
     error: "登录异常",
   })[status];
 }
 
 function crawlStageLabel(job: CrawlJobData): string {
-  return ({
+  const label = ({
     idle: "等待开始",
+    backend_disconnected: "服务连接失败",
+    auth_required: "需要登录小红书",
+    waiting_login: "等待登录",
+    ready: "准备就绪",
     queued: "已排队",
+    running: "正在采集笔记和评论",
     crawling: "正在采集笔记和评论",
     cleaning: "正在清洗数据",
     llm_extracting: "正在进行 LLM 抽取",
     analyzing: "正在统计分析",
     formatting: "正在格式化数据",
+    succeeded: "采集完成",
     completed: "采集完成",
     failed: "采集失败",
     cancelled: "已取消",
     timeout: "任务超时",
   })[job.status];
+  return job.message || job.error_message || label || job.stage || job.status;
 }
 
 function preferencePreview(preferences: PreferenceWeightsForCollection): string {
@@ -109,17 +122,20 @@ export function renderCollectionFlow(
   state: CollectionFlowState,
   product: PageProduct,
   preferences: PreferenceWeightsForCollection,
+  useMock: boolean,
 ): string {
   const validation = validateCrawlReady(state);
-  const runningStatuses = ["queued", "crawling", "cleaning", "llm_extracting", "analyzing", "formatting"];
+  const runningStatuses = ["queued", "running", "crawling", "cleaning", "llm_extracting", "analyzing", "formatting"];
   const canStart = !validation && !runningStatuses.includes(state.crawlJob.status);
   const isRunning = runningStatuses.includes(state.crawlJob.status);
+  const startLabel = state.starting ? (["failed", "timeout"].includes(state.crawlJob.status) ? "正在重试..." : "正在创建...") : "开始采集";
+  const retryLabel = state.starting ? "正在重试..." : "重试";
   const progress = Math.round(state.crawlJob.progress * 100);
   const productName = product.title || product.model || product.brand || "暂未识别商品名称";
 
   return `<section class="card collection-card">
     <div class="section-heading">
-      <div><span class="eyebrow">小红书采集 Mock</span><h2>登录与评论采集</h2></div>
+      <div><span class="eyebrow">${useMock ? "小红书采集 Mock" : "真实接口"}</span><h2>登录与评论采集</h2></div>
       <span class="collection-pill ${statusDot(state.service.status)}">${serviceLabel(state.service.status)}</span>
     </div>
 
@@ -135,7 +151,7 @@ export function renderCollectionFlow(
         <div><strong>小红书登录</strong><small>${escapeHtml(state.login.message ?? loginLabel(state.login.status))}</small></div>
         <span class="collection-pill ${statusDot(state.login.status)}">${loginLabel(state.login.status)}</span>
       </div>
-      <button class="primary-button inline" id="xhs-login-button" ${state.login.status === "opening_browser" || state.login.status === "waiting_for_login" ? "disabled" : ""}>${state.login.status === "logged_in" ? "重新登录" : "连接小红书"}</button>
+        <button class="primary-button inline" id="xhs-login-button" ${["opening_browser", "waiting_for_login", "queued", "running", "succeeded"].includes(state.login.status) ? "disabled" : ""}>${state.login.status === "logged_in" ? "重新登录" : "连接小红书"}</button>
     </div>
 
     <div class="collection-block">
@@ -151,7 +167,7 @@ export function renderCollectionFlow(
     ${state.formError ? `<div class="form-error">${escapeHtml(state.formError)}</div>` : ""}
 
     <div class="collection-actions">
-      ${["failed", "timeout"].includes(state.crawlJob.status) ? `<button class="primary-button inline" id="start-crawl-button" ${validation ? "disabled" : ""}>重试</button>` : `<button class="primary-button inline" id="start-crawl-button" ${canStart ? "" : "disabled"}>开始采集</button>`}
+      ${["failed", "timeout"].includes(state.crawlJob.status) ? `<button class="primary-button inline" id="start-crawl-button" ${validation || state.starting ? "disabled" : ""}>${retryLabel}</button>` : `<button class="primary-button inline" id="start-crawl-button" ${canStart && !state.starting ? "" : "disabled"}>${startLabel}</button>`}
       ${state.crawlJob.status === "cancelled" ? `<button class="secondary-button" id="back-crawl-button">返回</button>` : ""}
       ${isRunning ? `<button class="secondary-button danger" id="cancel-crawl-button">取消采集</button>` : ""}
       ${validation && !isRunning ? `<small>${escapeHtml(validation)}</small>` : ""}
