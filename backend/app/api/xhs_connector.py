@@ -27,6 +27,8 @@ from app.data.crawlers.xhs_client import (
     clean_text,
     translate_client_exception,
 )
+from app.services.analysis_pipeline import AnalysisPipelineService
+from app.services.persistence_service import PersistenceService
 
 
 router = APIRouter(prefix="/api/v1/xhs", tags=["xhs-connector"])
@@ -252,6 +254,8 @@ class XhsConnectorService:
         self.settings = settings or ConnectorSettings()
         self.jobs = job_store or JobStore()
         self.executor = executor or ThreadPoolExecutor(max_workers=2, thread_name_prefix="xhs-job")
+        self.analysis_pipeline = AnalysisPipelineService()
+        self.persistence = PersistenceService(PROJECT_ROOT / "data/processed/collection_results")
         self._futures: dict[str, Future[Any]] = {}
 
     def _build_scraper(self, browser: BrowserName = "auto") -> XiaohongshuScraper:
@@ -306,6 +310,13 @@ class XhsConnectorService:
         try:
             dataset = self._build_scraper().collect(source, query_override=query_override)
             result = normalize_collection_dataset(dataset)
+            self.jobs.update(job_id, stage="cleaning", progress=0.55)
+            analysis_result = self.analysis_pipeline.run(result).model_dump(mode="json")
+            self.jobs.update(job_id, stage="statistical_analysis", progress=0.85)
+            result = {**result, **analysis_result}
+            self.jobs.update(job_id, stage="persisting", progress=0.95)
+            storage_path = self.persistence.save(job_id, result)
+            result = {**result, "storage": {"path": storage_path}}
         except Exception as exc:
             error = translate_client_exception(exc)
             self.jobs.update(

@@ -1,4 +1,4 @@
-import type { Aspect, DemoProductScenario, PlatformComparison, ProductAnalysisData, RiskReason, TopSource } from "../api/types";
+import type { Aspect, DemoProductScenario, ProductAnalysisData, RiskReason, TopSource } from "../api/types";
 
 type DemoAspectCode =
   | "sound_quality"
@@ -18,8 +18,6 @@ type AspectInput = {
   disagreement: number;
 };
 
-const platforms = ["taobao", "xiaohongshu", "bilibili"] as const;
-
 function aspect(input: AspectInput): Aspect {
   const positive = Math.max(0.36, Math.min(0.9, input.score / 115));
   const negative = Math.max(0.04, Math.min(0.32, (100 - input.score) / 140));
@@ -38,39 +36,31 @@ function aspect(input: AspectInput): Aspect {
   };
 }
 
-function comparison(taobao: number, xhs: number, bilibili: number, risk: [number, number, number]): PlatformComparison[] {
-  return [
-    { platform: "taobao", content_count: 820, raw_sentiment_score: taobao + 5, trusted_sentiment_score: taobao, high_risk_ratio: risk[0] },
-    { platform: "xiaohongshu", content_count: 236, raw_sentiment_score: xhs + 7, trusted_sentiment_score: xhs, high_risk_ratio: risk[1] },
-    { platform: "bilibili", content_count: 118, raw_sentiment_score: bilibili + 3, trusted_sentiment_score: bilibili, high_risk_ratio: risk[2] },
-  ];
-}
-
 function sources(prefix: string, titles: [string, string, string], risks: [number, number, number]): TopSource[] {
   return [
     {
       content_id: `${prefix}_source_1`,
-      platform: platforms[0],
+      platform: "xiaohongshu",
       source_title: titles[0],
-      source_url: "https://item.taobao.com/",
+      source_url: "https://www.xiaohongshu.com/explore/mock-note-1",
       publish_time: "2026-07-12T10:20:00+08:00",
       relevance_score: 0.94,
       risk_score: risks[0],
     },
     {
       content_id: `${prefix}_source_2`,
-      platform: platforms[1],
+      platform: "xiaohongshu",
       source_title: titles[1],
-      source_url: "https://www.xiaohongshu.com/",
+      source_url: "https://www.xiaohongshu.com/explore/mock-note-2",
       publish_time: "2026-07-13T11:20:00+08:00",
       relevance_score: 0.9,
       risk_score: risks[1],
     },
     {
       content_id: `${prefix}_source_3`,
-      platform: platforms[2],
+      platform: "xiaohongshu",
       source_title: titles[2],
-      source_url: "https://www.bilibili.com/",
+      source_url: "https://www.xiaohongshu.com/explore/mock-note-3",
       publish_time: "2026-07-14T12:20:00+08:00",
       relevance_score: 0.86,
       risk_score: risks[2],
@@ -90,7 +80,6 @@ function analysis(config: {
   trustSummary: string;
   changedReason: string;
   aspects: AspectInput[];
-  platformComparison: PlatformComparison[];
   riskReasons: RiskReason[];
   riskRatio: number;
   topSources: TopSource[];
@@ -107,7 +96,7 @@ function analysis(config: {
     },
     analysis_status: "ready",
     data_status: { mode: "demo", is_stale: false, platform_failures: [] },
-    coverage: { total_content_count: 1174, platforms: ["taobao", "xiaohongshu", "bilibili"] },
+    coverage: { total_content_count: 1174, platforms: ["xiaohongshu"] },
     overview: { raw_sentiment_score: config.raw, trusted_sentiment_score: config.trusted, confidence: config.confidence },
     summaries: {
       raw: { one_sentence_summary: config.rawSummary },
@@ -116,13 +105,13 @@ function analysis(config: {
         { claim_id: `claim_${config.id}`, text: "平台种草内容中的绝对化推荐", reason: config.changedReason },
       ],
     },
-    platform_comparison: config.platformComparison,
+    platform_comparison: [],
     aspects: config.aspects.map(aspect),
     risk_summary: {
       high_risk_count: Math.round(1174 * config.riskRatio),
       high_risk_ratio: config.riskRatio,
       risk_reason_distribution: config.riskReasons,
-      display_note: "当前为蓝牙耳机演示数据，风险分数用于解释可信感知降权，不代表内容一定虚假。",
+      display_note: "当前为小红书 Mock 评论分析数据，风险分数用于提示内容需谨慎参考，不代表评论一定虚假。",
     },
     top_sources: config.topSources,
     updated_at: config.updatedAt,
@@ -155,7 +144,6 @@ export const demoProductScenarios: DemoProductScenario[] = [
         { code: "build_quality", label: "做工质感", score: 83, mentions: 214, disagreement: 0.22 },
         { code: "price_value", label: "性价比", score: 55, mentions: 274, disagreement: 0.52 },
       ],
-      platformComparison: comparison(83, 77, 81, [0.08, 0.21, 0.07]),
       riskReasons: [
         { reason_code: "promotional_language", reason_label: "营销式表达", count: 92 },
         { reason_code: "duplicate_pattern", reason_label: "内容模式重复", count: 48 },
@@ -191,7 +179,6 @@ export const demoProductScenarios: DemoProductScenario[] = [
         { code: "build_quality", label: "做工质感", score: 75, mentions: 196, disagreement: 0.28 },
         { code: "price_value", label: "性价比", score: 91, mentions: 544, disagreement: 0.11 },
       ],
-      platformComparison: comparison(84, 79, 82, [0.06, 0.13, 0.05]),
       riskReasons: [
         { reason_code: "overclaim", reason_label: "效果夸大", count: 46 },
         { reason_code: "duplicate_pattern", reason_label: "内容模式重复", count: 29 },
@@ -227,7 +214,6 @@ export const demoProductScenarios: DemoProductScenario[] = [
         { code: "build_quality", label: "做工质感", score: 78, mentions: 203, disagreement: 0.23 },
         { code: "price_value", label: "性价比", score: 72, mentions: 266, disagreement: 0.29 },
       ],
-      platformComparison: comparison(82, 83, 79, [0.05, 0.1, 0.04]),
       riskReasons: [
         { reason_code: "scenario_overfit", reason_label: "场景泛化过度", count: 39 },
         { reason_code: "missing_context", reason_label: "佩戴条件不足", count: 32 },

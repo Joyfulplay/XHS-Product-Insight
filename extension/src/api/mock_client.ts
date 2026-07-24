@@ -69,9 +69,9 @@ function scenarioAnalysis(): ProductAnalysisData {
     data.data_status = {
       mode: "cache",
       is_stale: true,
-      platform_failures: [{ platform: "xiaohongshu", reason: "平台采集暂时不可用" }],
+      platform_failures: [{ platform: "xiaohongshu", reason: "小红书采集暂时不可用" }],
     };
-    data.platform_comparison = data.platform_comparison.filter((item) => item.platform !== "xiaohongshu");
+    data.platform_comparison = [];
   }
   if (MOCK_SCENARIO === "empty") {
     data.aspects = [];
