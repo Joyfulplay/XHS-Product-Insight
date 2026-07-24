@@ -1,59 +1,61 @@
-# 项目结构草案
+# 项目结构
 
 ```text
 XHS-Product-Insight/
 ├── README.md
 ├── PROJECT_STRUCTURE.md
+├── requirements.txt
 ├── backend/
+│   ├── main.py
 │   ├── app/
 │   │   ├── api/
-│   │   │   ├── __init__.py
-│   │   │   └── routes.py
-│   │   ├── agents/
-│   │   │   ├── __init__.py
-│   │   │   └── product_insight_agent.py
-│   │   ├── core/
-│   │   │   ├── __init__.py
-│   │   │   ├── config.py
-│   │   │   └── logger.py
+│   │   │   ├── routes.py
+│   │   │   └── xhs_connector.py
 │   │   ├── data/
-│   │   │   ├── crawlers/
-│   │   │   │   ├── __init__.py
-│   │   │   │   └── xhs_client.py
-│   │   │   └── raw/
-│   │   ├── models/
-│   │   │   ├── __init__.py
-│   │   │   └── base.py
+│   │   │   └── crawlers/
+│   │   │       └── xhs_client.py
+│   │   ├── LLM/
+│   │   │   ├── client.py
+│   │   │   └── service.py
 │   │   ├── preprocess/
-│   │   │   ├── __init__.py
 │   │   │   ├── cleaner.py
 │   │   │   └── image_processor.py
 │   │   ├── schemas/
-│   │   │   ├── __init__.py
-│   │   │   └── request_models.py
-│   │   ├── services/
-│   │   │   ├── __init__.py
-│   │   │   ├── llm_service.py
-│   │   │   ├── persistence_service.py
-│   │   │   └── pipeline_service.py
-│   │   ├── storage/
-│   │   │   ├── db/
-│   │   │   └── objects/
-│   │   └── main.py
-│   ├── tests/
-│   │   ├── test_agents.py
-│   │   └── test_preprocess.py
-│   └── requirements.txt
-├── frontend/
-│   └── README.md
-└── LICENSE
+│   │   │   ├── analysis_result.py
+│   │   │   ├── cleaned_note.py
+│   │   │   ├── crawler.py
+│   │   │   └── llmoutput.py
+│   │   └── services/
+│   │       ├── analysis_pipeline.py
+│   │       └── persistence_service.py
+│   ├── run_eda.py
+│   └── tests/
+└── extension/
+    ├── mocks/
+    ├── scripts/
+    ├── src/
+    │   ├── api/
+    │   ├── analysis_view_model.ts
+    │   ├── collection_flow.ts
+    │   ├── config.ts
+    │   ├── content.ts
+    │   ├── product_page.ts
+    │   └── sidepanel.ts
+    ├── .env.local
+    ├── manifest.json
+    ├── package.json
+    ├── tsconfig.json
+    ├── vite.config.ts
+    └── vite.content.config.ts
 ```
 
 ## 说明
 
-- `backend/app/data/crawlers/`：数据获取模块，负责抓取小红书内容与相关原始信息。
+- `backend/main.py`：FastAPI 入口，挂载本地 API 与跨域配置。
+- `backend/app/api/xhs_connector.py`：浏览器插件调用的接口层，提供小红书登录状态、采集任务、进度查询和结果查询。
+- `backend/app/data/crawlers/`：小红书本地采集模块，读取本机登录状态并采集公开笔记与评论。
 - `backend/app/preprocess/`：数据预处理模块，包括文本清洗、图片处理、去重和标准化。
-- `backend/app/agents/`：AI Agent 相关逻辑，例如产品分析、结论生成等。
-- `backend/app/services/`：连接 LLM、数据存储、业务编排的服务层。
-- `backend/app/storage/`：用于永久化存储，例如数据库、对象存储、缓存文件。
-- `frontend/`：独立前端目录，后续可以放 Vue / React / Next.js 等项目。
+- `backend/app/schemas/`：Pydantic 数据契约，约束采集结果、清洗后笔记和分析结果结构。
+- `backend/app/services/analysis_pipeline.py`：后端分析编排，负责统计分析、可选 OpenAI 洞察生成和结果组装。
+- `backend/app/services/persistence_service.py`：结果持久化服务，保存和读取采集分析结果。
+- `extension/`：浏览器插件前端，负责识别淘宝/天猫商品页、调用 `/api/v1/xhs/collections`、轮询任务并展示结果。

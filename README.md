@@ -72,9 +72,9 @@ Xiaohongshu is the only source of review-analysis data. The planned collection d
 |---|---|
 | Browser extension | Recognize products, accept user settings, start tasks, show progress, and display results |
 | Local crawler connector | Handle Xiaohongshu login, collect notes and comments, manage asynchronous tasks, and return desensitized structured data |
-| Analysis backend | Clean data, calculate statistics, invoke the LLM, apply preference-based scoring, and generate product insights |
+| Analysis backend | Clean data, calculate statistics, optionally invoke the LLM, apply preference-based scoring, and generate product insights |
 
-The analysis backend implementation and final analysis API are still under development. This README therefore describes their responsibilities without assuming a specific analysis framework, directory structure, or startup command. The local crawler connector is implemented separately and exposes only login, collection, and desensitized-raw-data endpoints.
+The current integration uses the collection API as the end-to-end contract. After a collection job succeeds, `/api/v1/xhs/collections/{job_id}/result` returns the collected Xiaohongshu content together with normalized analysis fields for the browser extension. A separate `/analysis` job API has not been added.
 
 ## Browser Extension
 
@@ -101,10 +101,9 @@ The extension remains lightweight: it does not perform the crawler's login proce
 3. The user may edit the query and collection limits.
 4. The extension starts a login or collection task through the local connector.
 5. The connector collects Xiaohongshu notes and comments and removes sensitive information.
-6. The extension polls the task and receives desensitized structured data.
-7. The structured data is sent to the analysis backend.
-8. The backend cleans the data, performs statistical analysis, and extracts insights with an LLM.
-9. The extension displays the final results and representative Xiaohongshu content.
+6. The extension polls the task and then retrieves the collection result.
+7. The backend cleans the data, performs statistical analysis, optionally extracts insights with an LLM, and stores the result.
+8. The extension displays the final results and representative Xiaohongshu content.
 
 ## Local Crawler Connector
 
@@ -116,7 +115,7 @@ http://127.0.0.1:8000
 
 Login and collection may take time, so both operations should run as asynchronous jobs. The connector should return a `job_id`, and the extension should poll for status instead of keeping one HTTP request open.
 
-The current proposed interface contract is:
+The current interface contract is:
 
 | Method | Endpoint | Purpose |
 |---|---|---|
@@ -125,36 +124,34 @@ The current proposed interface contract is:
 | `GET` | `/api/v1/xhs/auth/status` | Query the current login status |
 | `POST` | `/api/v1/xhs/collections` | Start a collection task |
 | `GET` | `/api/v1/xhs/collections/{job_id}` | Query collection progress |
-| `GET` | `/api/v1/xhs/collections/{job_id}/result` | Retrieve the desensitized result |
+| `GET` | `/api/v1/xhs/collections/{job_id}/result` | Retrieve the desensitized collection result and analysis fields |
 
-These endpoints are an integration proposal and may be adjusted when the backend contract is finalized.
+### Run the Local Backend
 
-### Run the Local Crawler Connector
+The local FastAPI service provides the extension-facing API, Xiaohongshu collection connector, persistence, and analysis pipeline.
 
-The connector implementation is a local FastAPI service. This command starts only the crawler connector; it does not imply that the analysis backend contract is finalized.
-
-```powershell
-.\.venv\Scripts\python.exe -m pip install -r .\backend\app\data\crawlers\requirements.txt
-Set-Location backend
-..\.venv\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 8000
+```bash
+cd ~/XHS-Product-Insight
+source venv/bin/activate
+export PYTHONPATH=$(pwd)/backend:$PYTHONPATH
+uvicorn main:app --reload --app-dir backend --host 127.0.0.1 --port 8000
 ```
 
 It keeps task state in memory, so restarting the service clears prior job IDs. The login-status endpoint confirms that the required local cookie fields are present; an expired server-side session is reported by a later collection task as `AUTH_REQUIRED`.
 
-The crawler should receive either a product keyword or a Taobao/Tmall product link, plus an optional user-edited search query:
+The collection endpoint receives a product keyword or page-derived source:
 
 ```json
 {
-  "source": "Sony WH-1000XM5",
-  "query_override": "optional Xiaohongshu search query"
+  "source": "Sony WH-1000XM5"
 }
 ```
 
-User preference weights belong to the analysis layer and must not be sent to the crawler.
+User preference weights belong to the frontend scoring layer and are not required by the collection endpoint.
 
 ## Structured Raw Data
 
-The connector should return desensitized structured raw data rather than an LLM summary or an unprocessed command-line dump. A high-level example is:
+The connector and analysis pipeline return desensitized structured data rather than cookies, headers, or an unprocessed command-line dump. A high-level example of the collection portion is:
 
 ```json
 {
@@ -210,7 +207,7 @@ Only publicly available content should be collected. Data acquisition and proces
 
 ## Mock and Real Modes
 
-The extension supports Mock mode so that frontend development and demonstrations can continue before the real connector and analysis backend are completed.
+The extension supports both Mock mode and Real mode.
 
 ### Mock Mode
 
@@ -220,12 +217,29 @@ Mock mode simulates service connection, login, asynchronous collection, progress
 
 Real mode connects to the local service. A real request failure should be shown clearly to the user and must not be silently replaced by a successful Mock result.
 
+The repository currently tracks `extension/.env.local` with:
+
+```env
+VITE_USE_MOCK=false
+VITE_API_BASE_URL=http://127.0.0.1:8000/api/v1
+```
+
 ## Project Structure
 
-The confirmed frontend structure includes:
+The confirmed project structure includes:
 
 ```text
 XHS-Product-Insight/
+├── backend/
+│   ├── app/
+│   │   ├── api/
+│   │   ├── data/crawlers/
+│   │   ├── LLM/
+│   │   ├── preprocess/
+│   │   ├── schemas/
+│   │   └── services/
+│   ├── main.py
+│   └── tests/
 ├── extension/
 │   ├── mocks/
 │   ├── scripts/
@@ -234,10 +248,9 @@ XHS-Product-Insight/
 │   ├── package.json
 │   ├── tsconfig.json
 │   └── vite.config.ts
+├── requirements.txt
 └── README.md
 ```
-
-Backend and crawler directories will be documented after their implementation and interface contracts are confirmed.
 
 ## Run the Browser Extension
 
@@ -288,34 +301,33 @@ After changing extension code, rebuild the project and reload the unpacked exten
 - editable Xiaohongshu search query;
 - user preference settings, scoring, and ranking;
 - Xiaohongshu-only result presentation;
-- TypeScript type checking and production build scripts.
+- TypeScript type checking and production build scripts;
 - local asynchronous Xiaohongshu login and collection connector;
-- connector-side result-schema normalization and sensitive-field removal.
+- connector-side result-schema normalization and sensitive-field removal;
+- FastAPI collection/result endpoints used by the extension;
+- backend persistence for collection results;
+- statistical analysis and optional OpenAI-based insight generation.
 
 ### In Progress
 
 - unified task states and error codes;
-- real analysis-backend contract;
-- complete frontend-to-backend integration.
+- frontend result-field polishing for real collection results;
+- end-to-end stability testing against Xiaohongshu rate limits and safety checks.
 
 ### Planned
 
-- data cleaning and deduplication;
 - spam and promotional-content detection;
-- statistical analysis;
-- LLM-based structured information extraction;
 - multimodal analysis where applicable;
 - personalized purchase recommendations;
-- persistent result storage;
-- end-to-end testing.
+- broader end-to-end testing.
 
 ## Known Limitations
 
 - The project is not yet production-ready.
-- Some current frontend flows use Mock data.
-- The backend implementation and final API schemas are not yet confirmed.
+- Mock mode is still available for frontend-only demos, but real mode calls the local FastAPI service.
 - Product extraction may be affected by changes to Taobao or Tmall page structures.
 - Collection depends on a running local connector and a valid Xiaohongshu login state.
+- Xiaohongshu may require safety verification or rate-limit requests; the crawler stops instead of trying to bypass these checks.
 - LLM-generated conclusions may require human validation and should not be treated as guaranteed facts.
 
 ## Disclaimer
