@@ -889,7 +889,7 @@ async function checkCrawlerService(): Promise<void> {
       let lastError: unknown = null;
       for (let attempt = 0; attempt < 3; attempt += 1) {
         try {
-          const authStatus = await crawlerClient.getAuthStatus(controller.signal);
+          const authStatus = await crawlerClient.getAuthStatus({}, controller.signal);
           state.collection.service = { status: authStatus.service_status ?? "connected", checked_at: new Date().toISOString(), message: authStatus.message ?? "本地采集服务已连接" };
           state.collection.login = authStatus.authenticated === true
             ? { status: "logged_in", message: authStatus.message ?? "已登录" }
@@ -927,15 +927,7 @@ async function connectXiaohongshu(): Promise<void> {
   state.collection.submitMessage = null;
   render();
   try {
-    const initialAuth = await crawlerClient.getAuthStatus(controller.signal);
-    if (initialAuth.authenticated === true) {
-      state.collection.login = { status: "logged_in", message: initialAuth.message ?? "已登录" };
-      state.collection.formError = validateCrawlReady(state.collection);
-      render();
-      return;
-    }
-
-    const loginJob = await crawlerClient.startLogin("chrome", controller.signal);
+    const loginJob = await crawlerClient.startLogin("auto", true, controller.signal);
     if (!loginJob.job_id) throw new Error("登录任务创建失败：后端未返回 job_id");
     state.collection.login = { status: loginJob.status ?? "queued", message: loginJob.message ?? "登录任务已创建，请在打开的页面完成登录" };
     render();
@@ -947,7 +939,7 @@ async function connectXiaohongshu(): Promise<void> {
       state.collection.formError = validateCrawlReady(state.collection);
       render();
       if (nextLoginJob.status === "succeeded") {
-        const finalAuth = await crawlerClient.getAuthStatus(controller.signal);
+        const finalAuth = await crawlerClient.getAuthStatus({ refresh: true }, controller.signal);
         state.collection.login = finalAuth.authenticated === true
           ? { status: "logged_in", message: finalAuth.message ?? "已登录" }
           : { status: "error", message: apiErrorText(finalAuth.error) ?? finalAuth.message ?? "登录任务已完成，但认证状态仍未生效" };
@@ -982,6 +974,20 @@ async function startCrawl(): Promise<void> {
   const validation = validateCrawlReady(state.collection);
   state.collection.formError = validation;
   if (validation) {
+    render();
+    return;
+  }
+  try {
+    const authStatus = await crawlerClient.getAuthStatus({ refresh: true }, controller.signal);
+    if (authStatus.authenticated !== true) {
+      state.collection.login = { status: "expired", message: apiErrorText(authStatus.error) ?? authStatus.message ?? "小红书登录状态不存在或已过期，请重新登录" };
+      state.collection.formError = validateCrawlReady(state.collection);
+      render();
+      return;
+    }
+  } catch (error: unknown) {
+    state.collection.login = { status: "error", message: loginErrorMessage(error) };
+    state.collection.formError = validateCrawlReady(state.collection);
     render();
     return;
   }

@@ -8,7 +8,7 @@ export const apiPaths = {
     detail: (jobId: string) => `/jobs/${encodeURIComponent(jobId)}`,
   },
   crawler: {
-    authStatus: "/xhs/auth/status",
+    authStatus: (refresh = false) => `/xhs/auth/status${refresh ? "?refresh=true" : ""}`,
     login: "/xhs/auth/login",
     loginJob: (jobId: string) => `/xhs/auth/login/${encodeURIComponent(jobId)}`,
     collection: "/xhs/collections",

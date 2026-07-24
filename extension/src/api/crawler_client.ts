@@ -19,8 +19,8 @@ import type {
 
 export interface CrawlerApiClient {
   checkService(signal?: AbortSignal): Promise<CrawlerServiceState>;
-  getAuthStatus(signal?: AbortSignal): Promise<AuthStatusResponse>;
-  startLogin(browser?: BrowserChoice, signal?: AbortSignal): Promise<LoginStartResponse>;
+  getAuthStatus(options?: { refresh?: boolean }, signal?: AbortSignal): Promise<AuthStatusResponse>;
+  startLogin(browser?: BrowserChoice, force?: boolean, signal?: AbortSignal): Promise<LoginStartResponse>;
   getLoginJob(jobId: string, signal?: AbortSignal): Promise<LoginJobResponse>;
   getLoginStatus(signal?: AbortSignal): Promise<XiaohongshuLoginState>;
   startCollection(source: PageProduct, queryOverride?: string, signal?: AbortSignal): Promise<CollectionStartResponse>;
@@ -89,14 +89,14 @@ const mockCrawlerClient: CrawlerApiClient = {
     return { status: "connected", checked_at: new Date().toISOString(), message: "Mock 本地采集服务已连接" };
   },
 
-  async getAuthStatus(signal?: AbortSignal): Promise<AuthStatusResponse> {
+  async getAuthStatus(_options: { refresh?: boolean } = {}, signal?: AbortSignal): Promise<AuthStatusResponse> {
     await delay(220, signal);
     if (MOCK_SCENARIO === "backend_down") return { service_status: "not_started", login_status: "error", message: "Mock：后端未启动" };
     if (MOCK_SCENARIO === "cookie_expired") return { service_status: "connected", login_status: "expired", message: "Mock：Cookie 已过期，请重新登录" };
     return { service_status: "connected", login_status: "not_logged_in", message: "Mock：等待连接小红书" };
   },
 
-  async startLogin(_browser: BrowserChoice = "auto", signal?: AbortSignal): Promise<LoginStartResponse> {
+  async startLogin(_browser: BrowserChoice = "auto", _force = false, signal?: AbortSignal): Promise<LoginStartResponse> {
     await delay(280, signal);
     mockLoginPollCount = 0;
     return { job_id: `mock-login-${Date.now()}`, status: "opening_browser", message: "正在打开小红书登录窗口" };
@@ -219,19 +219,19 @@ const mockCrawlerClient: CrawlerApiClient = {
 const realCrawlerClient: CrawlerApiClient = {
   async checkService(signal?: AbortSignal): Promise<CrawlerServiceState> {
     try {
-      const status = await this.getAuthStatus(signal);
+      const status = await this.getAuthStatus({}, signal);
       return { status: status.service_status ?? "connected", checked_at: new Date().toISOString(), message: status.message ?? "本地采集服务已连接" };
     } catch {
       return { status: "not_started", checked_at: new Date().toISOString(), message: "本地采集服务未启动" };
     }
   },
 
-  getAuthStatus(signal?: AbortSignal): Promise<AuthStatusResponse> {
-    return requestJson(apiPaths.crawler.authStatus, {}, signal);
+  getAuthStatus(options: { refresh?: boolean } = {}, signal?: AbortSignal): Promise<AuthStatusResponse> {
+    return requestJson(apiPaths.crawler.authStatus(options.refresh === true), {}, signal);
   },
 
-  startLogin(browser: BrowserChoice = "auto", signal?: AbortSignal): Promise<LoginStartResponse> {
-    return requestJson<LoginStartResponse>(apiPaths.crawler.login, { method: "POST", body: JSON.stringify({ browser }) }, signal).then(assertLoginJob);
+  startLogin(browser: BrowserChoice = "auto", force = false, signal?: AbortSignal): Promise<LoginStartResponse> {
+    return requestJson<LoginStartResponse>(apiPaths.crawler.login, { method: "POST", body: JSON.stringify({ browser, force }) }, signal).then(assertLoginJob);
   },
 
   getLoginJob(jobId: string, signal?: AbortSignal): Promise<LoginJobResponse> {
@@ -239,7 +239,7 @@ const realCrawlerClient: CrawlerApiClient = {
   },
 
   async getLoginStatus(signal?: AbortSignal): Promise<XiaohongshuLoginState> {
-    const status = await this.getAuthStatus(signal);
+    const status = await this.getAuthStatus({}, signal);
     return loginStateFromAuthStatus(status);
   },
 

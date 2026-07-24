@@ -30,6 +30,16 @@ for (const method of requiredCrawlerMethods) {
   }
 }
 
+for (const requiredSnippet of [
+  'authStatus: (refresh = false)',
+  'startLogin("auto", true',
+  'getAuthStatus({ refresh: true }',
+]) {
+  if (!Object.values(content).some((source) => source.includes(requiredSnippet))) {
+    throw new Error(`Missing real-login contract: ${requiredSnippet}`);
+  }
+}
+
 for (const phrase of ["跨平台", "多平台", "平台对比", "B站", "bilibili", "淘宝评论"]) {
   for (const [file, source] of Object.entries(content)) {
     if (source.includes(phrase)) {
