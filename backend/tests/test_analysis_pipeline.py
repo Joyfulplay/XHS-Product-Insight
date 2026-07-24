@@ -58,3 +58,16 @@ def test_analysis_pipeline_uses_llm_insights_when_available(monkeypatch):
 
     assert result.llm_insights.overall_summary == "LLM ???????"
     assert result.llm_insights.usage_scenarios == ["??"]
+
+
+def test_sentiment_distribution_rounding_does_not_exceed_one():
+    service = AnalysisPipelineService()
+    texts = ["good"] * 8 + ["ordinary"] * 26 + ["bad"]
+
+    distribution = service._sentiment_distribution(texts)
+
+    assert distribution is not None
+    assert distribution.positive == 0.2286
+    assert distribution.neutral == 0.7429
+    assert distribution.negative == 0.0285
+    assert distribution.positive + distribution.neutral + distribution.negative <= 1

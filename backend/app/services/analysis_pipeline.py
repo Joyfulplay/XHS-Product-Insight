@@ -276,10 +276,13 @@ class AnalysisPipelineService:
             return None
         counts = Counter(self._sentiment_for_text(text) for text in texts)
         total = sum(counts.values()) or 1
+        positive = round(counts["positive"] / total, 4)
+        neutral = round(counts["neutral"] / total, 4)
+        negative = round(max(0.0, 1.0 - positive - neutral), 4)
         return SentimentDistribution(
-            positive=round(counts["positive"] / total, 4),
-            neutral=round(counts["neutral"] / total, 4),
-            negative=round(counts["negative"] / total, 4),
+            positive=positive,
+            neutral=neutral,
+            negative=negative,
         )
 
     def _sentiment_for_text(self, text: str) -> str:
