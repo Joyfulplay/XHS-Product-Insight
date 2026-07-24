@@ -87,6 +87,7 @@ function unwrapAnalysis(input: unknown): unknown {
 }
 
 function evidenceFromSource(source: ProductAnalysisData["top_sources"][number] | AnyRecord): AnalysisEvidenceViewModel {
+  const noteId = firstString(source, ["note_id", "id"], "");
   return {
     title: firstString(source, ["source_title", "title", "note_title"], "小红书代表性内容"),
     author: firstString(source, ["author_nickname", "author", "nickname"], "") || null,
@@ -94,7 +95,7 @@ function evidenceFromSource(source: ProductAnalysisData["top_sources"][number] |
     publish_time: firstString(source, ["publish_time", "published_at", "created_at"], "") || null,
     relevance_score: firstNumber(source, ["relevance_score", "score"], null),
     risk_score: firstNumber(source, ["risk_score"], null),
-    source_url: firstString(source, ["source_url", "url", "note_url"], "") || null,
+    source_url: firstString(source, ["source_url", "url", "note_url", "link"], "") || (noteId ? `https://www.xiaohongshu.com/explore/${encodeURIComponent(noteId)}` : null),
   };
 }
 
