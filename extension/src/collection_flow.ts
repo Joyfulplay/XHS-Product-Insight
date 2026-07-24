@@ -180,7 +180,7 @@ export function renderCollectionFlow(
     </div>` : ""}
 
     ${state.formattedPreview ? `<div class="formatted-preview">
-      <div class="section-heading"><div><span class="eyebrow">格式化数据预览</span><h2>待提交后端</h2></div></div>
+      <div class="section-heading"><div><span class="eyebrow">后端分析结果</span><h2>${useMock ? "Mock 数据预览" : "已完成采集与分析"}</h2></div></div>
       <dl>
         <div><dt>商品信息</dt><dd>${escapeHtml(productName)}</dd></div>
         <div><dt>搜索关键词</dt><dd>${escapeHtml(state.formattedPreview.keyword)}</dd></div>
@@ -188,7 +188,7 @@ export function renderCollectionFlow(
         <div><dt>笔记数量</dt><dd>${state.formattedPreview.note_count}</dd></div>
         <div><dt>评论数量</dt><dd>${state.formattedPreview.comment_count}</dd></div>
       </dl>
-      <button class="primary-button inline" id="submit-analysis-button" ${state.submitting ? "disabled" : ""}>${state.submitting ? "正在模拟提交" : "提交给后端分析"}</button>
+      <button class="primary-button inline" id="submit-analysis-button" ${state.submitting ? "disabled" : ""}>${state.submitting ? (useMock ? "正在模拟提交" : "正在确认结果") : (useMock ? "模拟提交给后端分析" : "确认查看分析结果")}</button>
       ${state.submitMessage ? `<p class="field-hint strong">${escapeHtml(state.submitMessage)}</p>` : ""}
     </div>` : ""}
   </section>`;
