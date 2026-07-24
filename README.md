@@ -130,6 +130,16 @@ The current interface contract is:
 
 The local FastAPI service provides the extension-facing API, Xiaohongshu collection connector, persistence, and analysis pipeline.
 
+For Windows users, the easiest way is to double-click:
+
+```text
+Start-XHS-Backend.bat
+```
+
+This launcher opens WSL, prepares the Python virtual environment, installs backend dependencies, and starts FastAPI at `http://127.0.0.1:8000`. Keep the launcher window open while using the browser extension.
+
+For development or debugging, the equivalent WSL command is:
+
 ```bash
 cd ~/XHS-Product-Insight
 source venv/bin/activate

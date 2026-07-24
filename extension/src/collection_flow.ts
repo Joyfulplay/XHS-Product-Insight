@@ -17,6 +17,7 @@ export interface CollectionFlowState {
   config: CrawlConfig;
   crawlJob: CrawlJobData;
   formattedPreview: FormattedCrawlerDataPreview | null;
+  backendConnecting: boolean;
   starting: boolean;
   submitting: boolean;
   submitMessage: string | null;
@@ -32,6 +33,7 @@ export function createInitialCollectionFlowState(): CollectionFlowState {
     config: { max_notes: 10, max_comments_per_note: 20 },
     crawlJob: { job_id: null, status: "idle", stage: "waiting", progress: 0, collected_notes: 0, collected_comments: 0, error_message: null },
     formattedPreview: null,
+    backendConnecting: false,
     starting: false,
     submitting: false,
     submitMessage: null,
@@ -71,6 +73,21 @@ function statusDot(status: string): string {
 
 function serviceLabel(status: CrawlerServiceState["status"]): string {
   return ({ checking: "正在检测", connected: "已连接", not_started: "未启动" })[status];
+}
+
+function backendConnectLabel(state: CollectionFlowState): string {
+  if (state.backendConnecting) return "正在检查...";
+  if (state.service.status === "connected" && state.login.status === "logged_in") return "后端与登录已就绪";
+  if (state.service.status === "connected") return "检查/连接小红书";
+  return "检查后端与登录";
+}
+
+function backendConnectHelp(state: CollectionFlowState, useMock: boolean): string {
+  if (useMock) return "Mock 模式会模拟后端连接，不需要启动 FastAPI。";
+  if (state.service.status === "not_started") return "如果连接失败，请先在项目根目录启动：source venv/bin/activate && export PYTHONPATH=$(pwd)/backend:$PYTHONPATH && uvicorn main:app --reload --app-dir backend --host 127.0.0.1 --port 8000";
+  if (state.service.status === "connected" && state.login.status !== "logged_in") return "后端已连接；点击后会打开小红书登录流程，按页面提示扫码或确认登录。";
+  if (state.login.status === "logged_in") return "后端连接和小红书登录状态都已准备好，可以开始采集。";
+  return "插件会自动检测后端；如果状态没有及时刷新，可以点击这里重新检查后端与小红书登录。";
 }
 
 function loginLabel(status: XiaohongshuLoginState["status"]): string {
@@ -163,10 +180,17 @@ export function renderCollectionFlow(
       <span class="collection-pill ${statusDot(state.service.status)}">${serviceLabel(state.service.status)}</span>
     </div>
 
+    <div class="collection-block connect-panel">
+      <div class="collection-row">
+        <div><strong>检查连接状态</strong><small>${escapeHtml(backendConnectHelp(state, useMock))}</small></div>
+        <button class="primary-button inline connect-button" id="backend-connect-button" ${state.backendConnecting || state.service.status === "checking" || ["opening_browser", "waiting_for_login", "queued", "running", "succeeded"].includes(state.login.status) ? "disabled" : ""}>${backendConnectLabel(state)}</button>
+      </div>
+    </div>
+
     <div class="collection-block">
       <div class="collection-row">
         <div><strong>本地采集服务</strong><small>${escapeHtml(state.service.message ?? "用于连接本机 Python 爬虫桥接服务")}</small></div>
-        <button class="secondary-button" id="crawler-check-button" ${state.service.status === "checking" ? "disabled" : ""}>重新检测</button>
+        <div class="collection-status-actions"><span class="collection-pill ${statusDot(state.service.status)}">${serviceLabel(state.service.status)}</span><button class="secondary-button" id="crawler-check-button" ${state.service.status === "checking" || state.backendConnecting ? "disabled" : ""}>重新检测</button></div>
       </div>
     </div>
 
@@ -175,7 +199,7 @@ export function renderCollectionFlow(
         <div><strong>小红书登录</strong><small>${escapeHtml(state.login.message ?? loginLabel(state.login.status))}</small></div>
         <span class="collection-pill ${statusDot(state.login.status)}">${loginLabel(state.login.status)}</span>
       </div>
-        <button class="primary-button inline" id="xhs-login-button" ${["opening_browser", "waiting_for_login", "queued", "running", "succeeded"].includes(state.login.status) ? "disabled" : ""}>${state.login.status === "logged_in" ? "重新登录" : "连接小红书"}</button>
+        <button class="primary-button inline" id="xhs-login-button" ${state.backendConnecting || ["opening_browser", "waiting_for_login", "queued", "running", "succeeded"].includes(state.login.status) ? "disabled" : ""}>${state.login.status === "logged_in" ? "重新登录" : "连接小红书"}</button>
     </div>
 
     <div class="collection-block">

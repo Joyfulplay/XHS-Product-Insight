@@ -49,6 +49,9 @@ button { font: inherit; }
 .collection-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
 .collection-row strong,.collection-row small { display: block; }
 .collection-row strong { color: #26352e; font-size: 12px; }
+.collection-status-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 7px; }
+.connect-panel { border-color: #cde7da; background: linear-gradient(135deg, #eef9f3, #fffaf0); }
+.connect-button { min-width: 118px; }
 .collection-row small { margin-top: 4px; color: #77827c; font-size: 10px; line-height: 1.45; }
 .collection-pill { flex: 0 0 auto; padding: 4px 7px; border-radius: 999px; font-size: 9px; font-weight: 750; }
 .collection-pill.ok { color: #116a4b; background: #ddf3e8; }
