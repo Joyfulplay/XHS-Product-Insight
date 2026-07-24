@@ -258,7 +258,7 @@ const realCrawlerClient: CrawlerApiClient = {
   },
 
   async startCrawl(request: CrawlStartRequest, signal?: AbortSignal): Promise<CrawlJobData> {
-    return crawlJobFromCollection(await this.startCollection(request.page_product, request.page_product.title ?? request.keyword, signal));
+    return crawlJobFromCollection(await this.startCollection(request.page_product, request.keyword, signal));
   },
 
   async getCrawlJob(jobId: string, signal?: AbortSignal): Promise<CrawlJobData> {

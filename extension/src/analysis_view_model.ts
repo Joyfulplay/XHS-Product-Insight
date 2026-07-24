@@ -223,7 +223,9 @@ export function normalizeAnalysisResult(input: ProductAnalysisData | unknown | n
   const riskReasons = normalizeRiskReasons(analysis);
   const normalizedRawComments = rawCommentCount ?? totalContent ?? 0;
   const normalizedValidComments = validCommentCount ?? (totalContent !== null ? Math.max(0, totalContent - highRisk) : null);
-  const analysisSource = firstString(analysis, ["analysis_source", "llm_source", "llm_insights.source", "llm_insights.analysis_source", "statistics.analysis_source"], "") || null;
+  const hasLlmInsights = isRecord(getPath(analysis, "llm_insights"));
+  const hasStatistics = isRecord(getPath(analysis, "statistics"));
+  const analysisSource = firstString(analysis, ["analysis_source", "llm_source", "llm_insights.source", "llm_insights.analysis_source", "statistics.analysis_source"], "") || (hasLlmInsights ? "llm" : hasStatistics ? "statistics" : null);
 
   return {
     sample: {

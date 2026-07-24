@@ -348,7 +348,7 @@ export interface CollectionJobResponse {
 }
 
 export interface CollectionResultResponse {
-  job_id: string;
+  job_id?: string;
   raw?: unknown;
   formatted_preview?: FormattedCrawlerDataPreview | null;
   analysis?: unknown;

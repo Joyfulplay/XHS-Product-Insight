@@ -15,6 +15,7 @@ import { CLIENT_VERSION, USE_MOCK } from "./config";
 import { parseSupportedProductPage } from "./product_page";
 import type {
   AnalysisMode,
+  AnalysisViewModel,
   Aspect,
   DemoProductScenario,
   DemoScenarioId,
@@ -184,6 +185,54 @@ function calculateFitScore(analysis: ProductAnalysisData, preferences = state.pr
   const fitScore = weighted.reduce((sum, item) => sum + item.score * item.weight, 0) / weightSum;
   return { score: clampScore(fitScore), message: null, validAspectCount: weighted.length };
 }
+function scoreFromSentimentDistribution(distribution: AnalysisViewModel["sample"]["sentiment_distribution"]): number | null {
+  if (!distribution) return null;
+  const positive = distribution.positive ?? 0;
+  const neutral = distribution.neutral ?? 0;
+  return clampScore(positive * 100 + neutral * 50);
+}
+
+function fitScoreFromCollectionView(view: AnalysisViewModel): FitScoreResult {
+  const baseScore = scoreFromSentimentDistribution(view.sample.sentiment_distribution);
+  if (baseScore === null) {
+    return { score: null, message: "后端已完成采集，但当前结果缺少情感分布，暂不能生成推荐分。", validAspectCount: 0 };
+  }
+  if (view.sample.note_count < 3) {
+    return { score: baseScore, message: "样本量偏少，推荐分仅作初步参考。", validAspectCount: view.attributes.length };
+  }
+  return { score: baseScore, message: null, validAspectCount: view.attributes.length };
+}
+
+function aspectCodeFromLabel(label: string, index: number): string {
+  return `collection_aspect_${index}_${label.replace(/\s+/g, "_").slice(0, 24)}`;
+}
+
+function aspectsFromCollectionView(view: AnalysisViewModel): Aspect[] {
+  const sentiment = view.sample.sentiment_distribution;
+  const fallbackScore = scoreFromSentimentDistribution(sentiment);
+  return view.attributes.slice(0, 8).map((attribute, index) => {
+    const positive = attribute.positive_mentions ?? null;
+    const negative = attribute.negative_mentions ?? null;
+    const mentionCount = positive !== null || negative !== null ? (positive ?? 0) + (negative ?? 0) : view.sample.note_count;
+    const positiveRatio = mentionCount > 0 && positive !== null ? positive / mentionCount : sentiment?.positive ?? null;
+    const negativeRatio = mentionCount > 0 && negative !== null ? negative / mentionCount : sentiment?.negative ?? null;
+    const neutralRatio = positiveRatio !== null && negativeRatio !== null ? Math.max(0, 1 - positiveRatio - negativeRatio) : sentiment?.neutral ?? null;
+    const aspectScore = positiveRatio !== null && neutralRatio !== null ? clampScore(positiveRatio * 100 + neutralRatio * 50) : fallbackScore;
+    return {
+      aspect_code: aspectCodeFromLabel(attribute.name, index),
+      aspect_label: attribute.name,
+      mention_count: mentionCount,
+      raw_sentiment_score: aspectScore,
+      trusted_sentiment_score: aspectScore,
+      positive_ratio: positiveRatio,
+      neutral_ratio: neutralRatio,
+      negative_ratio: negativeRatio,
+      platform_disagreement_score: null,
+      top_claim_ids: [],
+      evidence_content_ids: [],
+    };
+  });
+}
 
 function recommendationGrade(value: number | null): string {
   if (value === null) return "待判断";
@@ -311,9 +360,17 @@ function render(): void {
   const analysis = state.analysis;
   const pageProduct = state.pageProduct;
   const fallbackProduct = analysis.product ?? state.resolve.product;
-  const summary = analysis.summaries[state.mode].one_sentence_summary;
-  const currentScore = state.mode === "raw" ? analysis.overview.raw_sentiment_score : analysis.overview.trusted_sentiment_score;
-  const fitScore = calculateFitScore(analysis);
+  const collectionView = state.collectionResult ? normalizeAnalysisResult(state.collectionResult) : null;
+  const summary = collectionView
+    ? (collectionView.purchase_advice !== "暂无数据" ? collectionView.purchase_advice : collectionView.overall)
+    : analysis.summaries[state.mode].one_sentence_summary;
+  const collectionScore = collectionView ? scoreFromSentimentDistribution(collectionView.sample.sentiment_distribution) : null;
+  const currentScore = collectionView ? collectionScore : (state.mode === "raw" ? analysis.overview.raw_sentiment_score : analysis.overview.trusted_sentiment_score);
+  const rawScore = collectionView ? collectionScore : analysis.overview.raw_sentiment_score;
+  const trustedScore = collectionView ? collectionScore : analysis.overview.trusted_sentiment_score;
+  const confidence = collectionView ? collectionView.sample.confidence : analysis.overview.confidence;
+  const fitScore = collectionView ? fitScoreFromCollectionView(collectionView) : calculateFitScore(analysis);
+  const aspectRows = collectionView ? aspectsFromCollectionView(collectionView) : analysis.aspects;
   const failures = analysis.data_status.platform_failures ?? [];
 
   renderShell(`
@@ -332,18 +389,18 @@ function render(): void {
         </div>
       </section>
 
-      <div class="category-banner"><strong>试运行品类：蓝牙耳机</strong><span>当前前端使用蓝牙耳机 Mock 数据完成 dry run。</span></div>
+      <div class="category-banner"><strong>${USE_MOCK ? "试运行模式" : "真实采集模式"}</strong><span>${USE_MOCK ? "当前使用 Mock 数据完成 dry run。" : "当前插件已连接本地 FastAPI，并通过 /api/v1/xhs/collections 获取真实采集与分析结果。"}</span></div>
       <div class="category-banner"><strong>数据范围</strong><span>当前商品信息来自淘宝/天猫，评论分析数据仅来自小红书。</span></div>
       ${renderCollectionFlow(state.collection, pageProduct, state.preferences, USE_MOCK)}
       ${USE_MOCK ? `<div class="demo-banner"><strong>Mock 小红书数据</strong><span>当前分析结果为小红书笔记与评论 Mock 数据，不代表当前页面商品的真实分析。</span></div>` : ""}
       ${renderDemoSwitcher()}
       ${renderPreferenceControls()}
-      ${renderRecommendationResult(analysis, fitScore)}
-      ${renderSimilarProducts()}
+      ${collectionView ? renderCollectionRecommendationResult(collectionView, fitScore) : renderRecommendationResult(analysis, fitScore)}
+      ${USE_MOCK ? renderSimilarProducts() : ""}
 
       <section class="summary-card card accent-card">
         <div class="section-heading"><div><span class="eyebrow">一句话购买参考</span><h2>${state.mode === "trust_aware" ? "可信感知结论" : "原始评价结论"}</h2></div>${renderToggle()}</div>
-        <div class="demo-analysis-product"><span>当前选择的演示分析商品</span><strong>${text(fallbackProduct.canonical_name)}</strong><small>${text(fallbackProduct.brand)} · ${text(fallbackProduct.model)}</small></div>
+        <div class="demo-analysis-product"><span>${collectionView ? "当前真实采集商品" : "当前选择的演示分析商品"}</span><strong>${text(fallbackProduct.canonical_name)}</strong><small>${text(fallbackProduct.brand)} · ${text(fallbackProduct.model)}</small></div>
         <p class="summary-text">${text(summary)}</p>
         ${state.mode === "trust_aware" && analysis.summaries.changed_claims.length ? `<div class="change-box"><strong>为什么结论有变化？</strong>${analysis.summaries.changed_claims.map((claim) => `<button class="claim-link" data-claim="${escapeHtml(claim.claim_id)}"><span>${escapeHtml(claim.text)}</span>${escapeHtml(claim.reason)} <b>查看证据 →</b></button>`).join("")}</div>` : ""}
       </section>
@@ -351,10 +408,10 @@ function render(): void {
       <section class="card">
         <div class="section-heading"><div><span class="eyebrow">小红书评论倾向</span><h2>情感与可信评分</h2></div><div class="score-orb"><b>${score(currentScore)}</b><small>/ 100</small></div></div>
         <div class="metric-grid">
-          ${renderMetric("原始情感", analysis.overview.raw_sentiment_score, false)}
-          ${renderMetric("可信情感", analysis.overview.trusted_sentiment_score, true)}
+          ${renderMetric("原始情感", rawScore, false)}
+          ${renderMetric("可信情感", trustedScore, true)}
           ${renderMetric("按偏好推荐", fitScore.score, true)}
-          <div class="confidence"><span>分析置信度</span><strong>${percent(analysis.overview.confidence)}</strong></div>
+          <div class="confidence"><span>分析置信度</span><strong>${percent(confidence)}</strong></div>
         </div>
         <p class="fine-print">分数仅反映小红书笔记与评论中的评价倾向，并非商品客观质量分。</p>
       </section>
@@ -363,10 +420,10 @@ function render(): void {
 
       <section class="card">
         <div class="section-heading"><div><span class="eyebrow">具体表现</span><h2>方面评价</h2></div><small>点击查看证据</small></div>
-        ${analysis.aspects.length ? `<div class="aspect-list">${analysis.aspects.map(renderAspect).join("")}</div>` : renderEmpty("暂无可展示的方面评价")}
+        ${aspectRows.length ? `<div class="aspect-list">${aspectRows.map(renderAspect).join("")}</div>` : renderEmpty("暂无可展示的方面评价")}
       </section>
 
-      ${renderRisk(analysis)}
+      ${collectionView ? renderCollectionRisk(collectionView) : renderRisk(analysis)}
       ${renderSources(state.collectionResult ?? analysis)}
       ${renderJob()}
       <footer><span>更新于 ${dateTime(analysis.updated_at)}</span><span>TrustLens · 仅供决策参考</span></footer>
@@ -404,6 +461,18 @@ function renderRecommendationResult(analysis: ProductAnalysisData, fitScore: Fit
   return `<section class="card recommendation-card">
     <div class="section-heading"><div><span class="eyebrow">个性化推荐结果</span><h2>${recommendationGrade(fitScore.score)}</h2></div><div class="score-orb compact"><b>${score(fitScore.score)}</b><small>/ 100</small></div></div>
     ${fitScore.message ? `<div class="empty-state">${escapeHtml(fitScore.message)}</div>` : `<div class="recommendation-copy"><p><strong>推荐理由：</strong>${escapeHtml(recommendationReason(analysis))}</p><p><strong>注意事项：</strong>${escapeHtml(recommendationCaution(analysis))}</p></div>`}
+  </section>`;
+}
+function renderCollectionRecommendationResult(view: AnalysisViewModel, fitScore: FitScoreResult): string {
+  const reason = view.purchase_advice !== "暂无数据" ? view.purchase_advice : view.overall;
+  const cautionParts = [
+    view.weaknesses.length ? `主要顾虑：${listText(view.weaknesses)}` : "",
+    view.sample.low_confidence ? "当前样本量或置信度偏低，建议结合代表性笔记一起判断。" : "",
+  ].filter(Boolean);
+  return `<section class="card recommendation-card">
+    <div class="section-heading"><div><span class="eyebrow">个性化推荐结果</span><h2>${recommendationGrade(fitScore.score)}</h2></div><div class="score-orb compact"><b>${score(fitScore.score)}</b><small>/ 100</small></div></div>
+    ${fitScore.message ? `<div class="status-banner warning">${escapeHtml(fitScore.message)}</div>` : ""}
+    <div class="recommendation-copy"><p><strong>推荐理由：</strong>${escapeHtml(reason)}</p><p><strong>注意事项：</strong>${escapeHtml(cautionParts.join(" ") || "当前未发现明显高风险内容，仍建议查看代表性笔记原文。")}</p></div>
   </section>`;
 }
 
@@ -448,6 +517,14 @@ function renderRisk(analysis: ProductAnalysisData): string {
     <div class="section-heading"><div><span class="eyebrow">内容可信风险</span><h2>风险说明</h2></div><div class="risk-total"><b>${risk.high_risk_count}</b><small>条 · ${percent(risk.high_risk_ratio)}</small></div></div>
     ${risk.risk_reason_distribution.length ? `<div class="risk-reasons">${risk.risk_reason_distribution.map((reason) => `<div><span>${escapeHtml(reason.reason_label)}</span><b>${reason.count}</b></div>`).join("")}</div>` : `<p class="zero-risk">当前样本中未识别到高风险内容。</p>`}
     <div class="risk-note"><span>i</span><p>${text(risk.display_note ?? "风险分数表示内容需要谨慎参考，不代表评论一定虚假。")}</p></div>
+  </section>`;
+}
+function renderCollectionRisk(view: AnalysisViewModel): string {
+  const riskCount = Math.round((view.sample.raw_comment_count ?? 0) * (view.sample.risk_negative_ratio ?? 0));
+  return `<section class="card risk-card">
+    <div class="section-heading"><div><span class="eyebrow">内容可信风险</span><h2>风险说明</h2></div><div class="risk-total"><b>${riskCount}</b><small>条 · ${percent(view.sample.risk_negative_ratio)}</small></div></div>
+    ${view.risk_reasons.length ? `<div class="risk-reasons">${view.risk_reasons.map((reason) => `<div><span>${escapeHtml(reason.reason_label)}</span><b>${reason.count}</b></div>`).join("")}</div>` : `<p class="zero-risk">当前样本中未识别到高风险内容。</p>`}
+    <div class="risk-note"><span>i</span><p>${text("风险/负面占比来自后端统计结果，仅提示内容需要谨慎参考，不代表评论一定虚假。")}</p></div>
   </section>`;
 }
 
@@ -923,7 +1000,7 @@ async function startCrawl(): Promise<void> {
       await pollCollectionJob(storedTask.jobId, { ...request, keyword: storedTask.query }, version);
       return;
     }
-    const startRequest = USE_MOCK ? request : { ...request, keyword: state.pageProduct?.title?.trim() || request.keyword };
+    const startRequest = request;
     const startedJob = await crawlerClient.startCrawl(startRequest, controller.signal);
     if (startedJob.job_id) await saveStoredCollectionTask(collectionTaskFromRequest(startedJob.job_id, startRequest));
     state.collection.crawlJob = startedJob;
@@ -1074,8 +1151,8 @@ async function submitFormattedPreview(): Promise<void> {
   state.collection.submitMessage = null;
   render();
   try {
-    await wait(600);
-    state.collection.submitMessage = "已模拟提交给后端分析，等待真实接口接入。";
+    await wait(200);
+    state.collection.submitMessage = USE_MOCK ? "Mock：已模拟提交给后端分析。" : "后端已完成采集与分析，页面下方已展示真实分析结果。";
   } finally {
     state.collection.submitting = false;
     render();
