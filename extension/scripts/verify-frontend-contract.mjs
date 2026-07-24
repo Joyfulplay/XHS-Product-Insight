@@ -34,6 +34,9 @@ for (const requiredSnippet of [
   'authStatus: (refresh = false)',
   'startLogin("auto", true',
   'getAuthStatus({ refresh: true }',
+  'max_notes: config?.max_notes ?? 10',
+  'max_comments_per_note: config?.max_comments_per_note ?? 20',
+  'this.startCollection(request.page_product, request.keyword, request.config, signal)',
 ]) {
   if (!Object.values(content).some((source) => source.includes(requiredSnippet))) {
     throw new Error(`Missing real-login contract: ${requiredSnippet}`);

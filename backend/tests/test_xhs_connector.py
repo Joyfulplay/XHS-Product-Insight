@@ -53,9 +53,57 @@ class FakeConnectorService(XhsConnectorService):
     def __init__(self, scraper):
         super().__init__(job_store=JobStore(), executor=ImmediateExecutor())
         self.scraper = scraper
+        self.build_calls = []
 
-    def _build_scraper(self, browser="auto"):
+    def _build_scraper(self, browser="auto", *, max_notes=None, max_comments=None):
+        self.build_calls.append(
+            {"browser": browser, "max_notes": max_notes, "max_comments": max_comments}
+        )
         return self.scraper
+
+
+def test_collection_request_defaults_and_custom_limits_reach_the_scraper():
+    dataset = {
+        "schema_version": "1.1",
+        "input": {"type": "keyword", "resolved_query": "example headphones"},
+        "collection": {"note_count": 0, "comment_count": 0},
+        "notes": [],
+        "errors": [],
+    }
+    scraper = FakeScraper(dataset)
+    service = FakeConnectorService(scraper)
+
+    default_request = CollectionRequest(source="example headphones")
+    assert default_request.max_notes == 10
+    assert default_request.max_comments_per_note == 20
+
+    default_job = service.start_collection(default_request)
+    assert service.jobs.get(default_job["job_id"])["status"] == "succeeded"
+    assert service.build_calls[-1] == {"browser": "auto", "max_notes": 10, "max_comments": 20}
+
+    job = service.start_collection(
+        CollectionRequest(source="example headphones", max_notes=15, max_comments_per_note=20)
+    )
+
+    assert service.jobs.get(job["job_id"])["status"] == "succeeded"
+    assert service.build_calls[-1] == {"browser": "auto", "max_notes": 15, "max_comments": 20}
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"source": "example headphones", "max_notes": 0},
+        {"source": "example headphones", "max_notes": 51},
+        {"source": "example headphones", "max_comments_per_note": -1},
+        {"source": "example headphones", "max_comments_per_note": 101},
+    ],
+)
+def test_collection_endpoint_rejects_out_of_range_limits(payload):
+    from main import app
+
+    response = TestClient(app).post("/api/v1/xhs/collections", json=payload)
+
+    assert response.status_code == 422
 
 
 def test_collection_request_accepts_a_product_keyword():
