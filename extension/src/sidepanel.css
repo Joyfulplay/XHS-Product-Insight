@@ -67,10 +67,12 @@ button { font: inherit; }
 .collection-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .collection-actions small { color: #8e9792; font-size: 9px; }
 .form-error { padding: 8px 10px; color: #8d463d; background: #fff0ed; border: 1px solid #f1d2cc; border-radius: 8px; font-size: 10px; }
-.crawl-progress { padding: 12px; color: white; background: #244f43; border-radius: 11px; }
-.crawl-progress > div:first-child { display: flex; justify-content: space-between; font-size: 11px; }
+.crawl-progress { display: flex; align-items: center; gap: 8px; padding: 12px; color: white; background: #244f43; border-radius: 11px; }
 .crawl-progress strong { font-size: 12px; }
 .crawl-progress small { display: block; margin-top: 7px; color: #c6ddd3; font-size: 9px; line-height: 1.45; }
+.crawl-progress.success,.crawl-progress.failed { display: block; }
+.crawl-progress.failed { background: #7b3d35; }
+.crawl-spinner { flex: 0 0 auto; width: 14px; height: 14px; border: 2px solid rgba(255,255,255,.35); border-top-color: #fff; border-radius: 50%; animation: spin .8s linear infinite; }
 .formatted-preview { display: grid; gap: 10px; padding-top: 13px; border-top: 1px solid #edf1ee; }
 .formatted-preview dl { display: grid; gap: 7px; margin: 0; }
 .formatted-preview dl div { display: grid; grid-template-columns: 72px minmax(0,1fr); gap: 9px; padding: 8px 9px; background: #f7faf8; border-radius: 8px; }

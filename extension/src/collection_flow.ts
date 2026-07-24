@@ -111,6 +111,31 @@ function crawlStageLabel(job: CrawlJobData): string {
   return job.message || job.error_message || label || job.stage || job.status;
 }
 
+function renderCrawlStatus(state: CollectionFlowState, isRunning: boolean): string {
+  if (state.crawlJob.status === "idle") return "";
+  if (isRunning) {
+    return `<div class="crawl-progress running">
+      <span class="crawl-spinner" aria-hidden="true"></span>
+      <strong>采集中…</strong>
+    </div>`;
+  }
+  if (["succeeded", "completed"].includes(state.crawlJob.status)) {
+    return `<div class="crawl-progress success">
+      <strong>采集完成</strong>
+      ${state.formattedPreview ? `<small>共采集 ${state.formattedPreview.note_count} 篇笔记，${state.formattedPreview.comment_count} 条评论</small>` : ""}
+    </div>`;
+  }
+  if (["failed", "timeout"].includes(state.crawlJob.status)) {
+    return `<div class="crawl-progress failed">
+      <strong>采集失败</strong>
+      <small>${escapeHtml(crawlStageLabel(state.crawlJob))}</small>
+    </div>`;
+  }
+  return `<div class="crawl-progress">
+    <strong>${escapeHtml(crawlStageLabel(state.crawlJob))}</strong>
+  </div>`;
+}
+
 function preferencePreview(preferences: PreferenceWeightsForCollection): string {
   return Object.entries(preferences)
     .filter(([, value]) => value > 0)
@@ -130,7 +155,6 @@ export function renderCollectionFlow(
   const isRunning = runningStatuses.includes(state.crawlJob.status);
   const startLabel = state.starting ? (["failed", "timeout"].includes(state.crawlJob.status) ? "正在重试..." : "正在创建...") : "开始采集";
   const retryLabel = state.starting ? "正在重试..." : "重试";
-  const progress = Math.round(state.crawlJob.progress * 100);
   const productName = product.title || product.model || product.brand || "暂未识别商品名称";
 
   return `<section class="card collection-card">
@@ -173,11 +197,7 @@ export function renderCollectionFlow(
       ${validation && !isRunning ? `<small>${escapeHtml(validation)}</small>` : ""}
     </div>
 
-    ${state.crawlJob.status !== "idle" ? `<div class="crawl-progress">
-      <div><span>${crawlStageLabel(state.crawlJob)}</span><strong>${progress}%</strong></div>
-      <div class="job-bar"><i style="width:${progress}%"></i></div>
-      <small>已采集 ${state.crawlJob.collected_notes} 篇笔记，${state.crawlJob.collected_comments} 条评论${state.crawlJob.error_message ? ` · ${escapeHtml(state.crawlJob.error_message)}` : ""}</small>
-    </div>` : ""}
+    ${renderCrawlStatus(state, isRunning)}
 
     ${state.formattedPreview ? `<div class="formatted-preview">
       <div class="section-heading"><div><span class="eyebrow">后端分析结果</span><h2>${useMock ? "Mock 数据预览" : "已完成采集与分析"}</h2></div></div>
