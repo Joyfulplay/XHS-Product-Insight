@@ -43,6 +43,57 @@ for (const requiredSnippet of [
   }
 }
 
+for (const requiredSnippet of [
+  'chrome.tabs.create({ url })',
+  'safeExternalUrl(value)',
+  '"source_url", "url", "note_url", "link"',
+  '`https://www.xiaohongshu.com/explore/${encodeURIComponent(noteId)}`',
+  'PRODUCT_CACHE_KEY_PREFIX = "trustlens.productResult."',
+  'PRODUCT_CACHE_INDEX_KEY = "trustlens.productResultIndex"',
+  'MAX_PRODUCT_CACHE_ENTRIES = 10',
+  'function productKeyFor(product',
+  'function saveProductResult(',
+  'function loadProductResult(',
+  'function applyStoredProductResult(',
+  'rawCollectionResult',
+  'analysisResult',
+  'noteCount',
+  'commentCount',
+  'completedAt',
+  'savedAt',
+  'state.view = "restoring"',
+  'await loadProductResult(nextProductKey)',
+  'applyStoredProductResult(cached)',
+  'await restoreActiveCollectionTask()',
+  'await checkCrawlerService()',
+  'applyAuthStatus(authStatus)',
+  'isTemporaryAuthCheckError(error)',
+  '采集服务认证检查暂时失败，历史结果已保留。',
+  'await pollCollectionJob(storedTask.jobId',
+  'fetchedCompletedResults.has(jobId)',
+  'await crawlerClient.startCrawl(startRequest',
+]) {
+  if (!Object.values(content).some((source) => source.includes(requiredSnippet))) {
+    throw new Error(`Missing persistence/original-link contract: ${requiredSnippet}`);
+  }
+}
+
+if (Object.values(content).some((source) => source.includes("chrome.storage.local.clear") || source.includes(".clear()"))) {
+  throw new Error("Forbidden storage clear call found; extension must only remove its own expired keys");
+}
+
+const sidepanel = content["src/sidepanel.ts"];
+const initializeBody = sidepanel.slice(sidepanel.indexOf("async function initialize()"));
+if (initializeBody.indexOf('await loadProductResult(nextProductKey)') > initializeBody.indexOf('await checkCrawlerService()')) {
+  throw new Error("Initialization order must restore product cache before auth status check");
+}
+if (sidepanel.includes("state.collectionResult = null;\n  state.collection.starting = false")) {
+  throw new Error("Resetting task controls must not clear historical collectionResult");
+}
+if (!sidepanel.includes('storageRemove(expiredKeys)')) {
+  throw new Error("LRU pruning must remove only expired TrustLens product-result keys");
+}
+
 for (const phrase of ["跨平台", "多平台", "平台对比", "B站", "bilibili", "淘宝评论"]) {
   for (const [file, source] of Object.entries(content)) {
     if (source.includes(phrase)) {
@@ -113,6 +164,14 @@ if (normalizedSchema11.keywords[0] !== "降噪") {
 }
 if (normalizedSchema11.evidence[0]?.source_url !== "https://www.xiaohongshu.com/explore/note-1") {
   throw new Error("schema 1.1 representative_notes mapping failed");
+}
+const linkOnlyResult = { representative_notes: [{ note_id: "generated-note", title: "无 URL 笔记" }, { title: "link 笔记", link: "https://www.xiaohongshu.com/explore/link-note" }] };
+const normalizedLinkOnly = normalizeAnalysisResult(linkOnlyResult);
+if (normalizedLinkOnly.evidence[0]?.source_url !== "https://www.xiaohongshu.com/explore/generated-note") {
+  throw new Error("note_id fallback URL mapping failed");
+}
+if (normalizedLinkOnly.evidence[1]?.source_url !== "https://www.xiaohongshu.com/explore/link-note") {
+  throw new Error("link source URL mapping failed");
 }
 
 console.log("verify-frontend-contract: ok");

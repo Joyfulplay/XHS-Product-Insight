@@ -35,7 +35,7 @@ const appRoot = document.querySelector<HTMLDivElement>("#app");
 if (!appRoot) throw new Error("Missing #app root");
 const app: HTMLDivElement = appRoot;
 
-type ViewState = "loading" | "unsupported" | "error" | "ready";
+type ViewState = "loading" | "restoring" | "unsupported" | "error" | "ready";
 
 const state: {
   view: ViewState;
@@ -97,14 +97,38 @@ let loginPollingVersion = 0;
 let collectionRequestInFlight = false;
 let collectionRestoreStarted = false;
 let memoryStoredCollectionTask: StoredCollectionTask | null = null;
+let currentProductKey: string | null = null;
+const fetchedCompletedResults = new Set<string>();
 
 const ACTIVE_COLLECTION_KEY = "trustlens.activeXhsCollection";
+const PRODUCT_CACHE_INDEX_KEY = "trustlens.productResultIndex";
+const PRODUCT_CACHE_KEY_PREFIX = "trustlens.productResult.";
+const MAX_PRODUCT_CACHE_ENTRIES = 10;
 
 interface StoredCollectionTask {
   jobId: string;
   query: string;
   pageUrl: string;
   sourceProductId: string | null;
+  productKey?: string;
+}
+
+interface StoredProductResult {
+  schemaVersion: 1;
+  productKey: string;
+  productTitle: string | null;
+  productUrl: string;
+  collectionJobId: string | null;
+  taskStatus: CollectionFlowState["crawlJob"];
+  crawlConfig: CollectionFlowState["config"];
+  queryKeyword: string;
+  rawCollectionResult: unknown | null;
+  analysisResult: AnalysisViewModel | null;
+  formattedPreview: FormattedCrawlerDataPreview | null;
+  noteCount: number;
+  commentCount: number;
+  completedAt: string | null;
+  savedAt: string;
 }
 
 type ChromeStorageLocal = typeof chrome.storage.local;
@@ -411,6 +435,10 @@ function renderShell(content: string): void {
 }
 
 function render(): void {
+  if (state.view === "restoring") {
+    renderShell(`<section class="center-state"><div class="spinner"></div><h1>正在恢复上次结果</h1><p>先读取当前商品缓存，再检测采集服务状态…</p></section>`);
+    return;
+  }
   if (state.view === "loading") {
     renderShell(`<section class="center-state"><div class="spinner"></div><h1>正在识别当前商品</h1><p>读取页面信息并准备分析结果…</p></section>`);
     return;
@@ -627,6 +655,7 @@ function renderSources(analysis: ProductAnalysisData | unknown): string {
   const xhsSources = normalizeAnalysisResult(analysis).evidence;
   return `<section class="card">
     <div class="section-heading"><div><span class="eyebrow">${USE_MOCK ? "Mock 小红书内容" : "小红书内容"}</span><h2>小红书代表性内容</h2></div></div>
+    <p class="field-hint">原文将在新标签页打开；若小红书网页要求登录，请在当前浏览器完成登录。该登录与采集服务登录相互独立。</p>
     ${xhsSources.length ? `<div class="source-list">${xhsSources.map((source) => `<button class="source-row external-link" data-source-url="${escapeHtml(source.source_url ?? "")}" ${source.source_url ? "" : "disabled"}><span class="source-platform">小红书</span><strong>${escapeHtml(source.title)}</strong><small>${dateTime(source.publish_time)} · 相关度 ${percent(source.relevance_score)}${source.risk_score === null ? "" : ` · 风险分数 ${source.risk_score.toFixed(2)}`}${source.quote ? ` · ${escapeHtml(source.quote)}` : ""}</small><i>↗</i></button>`).join("")}</div>` : renderEmpty("暂无小红书代表性内容")}
   </section>`;
 }
@@ -792,6 +821,129 @@ function chromeStorageLocal(): ChromeStorageLocal | null {
   return null;
 }
 
+function storageGet<T>(keys?: string | string[] | Record<string, unknown> | null): Promise<T> {
+  const storage = chromeStorageLocal();
+  if (!storage) return Promise.resolve({} as T);
+  return new Promise((resolve) => {
+    try {
+      storage.get(keys ?? null, (items) => {
+        const runtimeError = chrome.runtime?.lastError;
+        if (runtimeError) storageWarning("get", runtimeError.message);
+        resolve((runtimeError ? {} : items) as T);
+      });
+    } catch (error: unknown) {
+      storageWarning("get", error);
+      resolve({} as T);
+    }
+  });
+}
+
+function storageSet(items: Record<string, unknown>): Promise<void> {
+  const storage = chromeStorageLocal();
+  if (!storage) return Promise.resolve();
+  return new Promise((resolve) => {
+    try {
+      storage.set(items, () => {
+        const runtimeError = chrome.runtime?.lastError;
+        if (runtimeError) storageWarning("set", runtimeError.message);
+        resolve();
+      });
+    } catch (error: unknown) {
+      storageWarning("set", error);
+      resolve();
+    }
+  });
+}
+
+function storageRemove(keys: string | string[]): Promise<void> {
+  const storage = chromeStorageLocal();
+  if (!storage) return Promise.resolve();
+  return new Promise((resolve) => {
+    try {
+      storage.remove(keys, () => {
+        const runtimeError = chrome.runtime?.lastError;
+        if (runtimeError) storageWarning("remove", runtimeError.message);
+        resolve();
+      });
+    } catch (error: unknown) {
+      storageWarning("remove", error);
+      resolve();
+    }
+  });
+}
+
+function normalizePageUrl(value: string): string {
+  try {
+    const url = new URL(value);
+    url.hash = "";
+    for (const key of [...url.searchParams.keys()]) {
+      if (!["id", "itemId", "item_id"].includes(key)) url.searchParams.delete(key);
+    }
+    return url.toString();
+  } catch {
+    return value.trim();
+  }
+}
+
+function productKeyFor(product: PageProduct): string {
+  const stable = product.source_product_id?.trim() || normalizePageUrl(product.page_url) || product.title?.trim() || "unknown";
+  return `taobao:${stable.toLowerCase()}`;
+}
+
+function productCacheKey(productKey: string): string {
+  return `${PRODUCT_CACHE_KEY_PREFIX}${encodeURIComponent(productKey)}`;
+}
+
+async function saveProductResult(productKey: string, updates: Partial<StoredProductResult> = {}): Promise<void> {
+  if (USE_MOCK || !state.pageProduct) return;
+  const rawCollectionResult = updates.rawCollectionResult !== undefined ? updates.rawCollectionResult : state.collectionResult;
+  const normalized = rawCollectionResult ? normalizeAnalysisResult(rawCollectionResult) : null;
+  const preview = updates.formattedPreview !== undefined ? updates.formattedPreview : state.collection.formattedPreview;
+  const now = new Date().toISOString();
+  const record: StoredProductResult = {
+    schemaVersion: 1,
+    productKey,
+    productTitle: state.pageProduct.title,
+    productUrl: state.pageProduct.page_url,
+    collectionJobId: state.collection.crawlJob.job_id,
+    taskStatus: state.collection.crawlJob,
+    crawlConfig: { ...state.collection.config },
+    queryKeyword: state.collection.keyword,
+    rawCollectionResult,
+    analysisResult: normalized,
+    formattedPreview: preview,
+    noteCount: preview?.note_count ?? normalized?.sample.note_count ?? state.collection.crawlJob.collected_notes ?? 0,
+    commentCount: preview?.comment_count ?? normalized?.sample.raw_comment_count ?? state.collection.crawlJob.collected_comments ?? 0,
+    completedAt: ["completed", "succeeded"].includes(state.collection.crawlJob.status) ? (updates.completedAt ?? now) : (updates.completedAt ?? null),
+    savedAt: now,
+  };
+  const indexItems = await storageGet<Record<string, string[]>>([PRODUCT_CACHE_INDEX_KEY]);
+  const currentIndex = Array.isArray(indexItems[PRODUCT_CACHE_INDEX_KEY]) ? indexItems[PRODUCT_CACHE_INDEX_KEY] : [];
+  const nextIndex = [productKey, ...currentIndex.filter((key) => key !== productKey)].slice(0, MAX_PRODUCT_CACHE_ENTRIES);
+  const expiredKeys = currentIndex.filter((key) => !nextIndex.includes(key)).map(productCacheKey);
+  await storageSet({ [productCacheKey(productKey)]: record, [PRODUCT_CACHE_INDEX_KEY]: nextIndex });
+  if (expiredKeys.length) await storageRemove(expiredKeys);
+}
+
+async function loadProductResult(productKey: string): Promise<StoredProductResult | null> {
+  if (USE_MOCK) return null;
+  const items = await storageGet<Record<string, StoredProductResult>>([productCacheKey(productKey)]);
+  const record = items[productCacheKey(productKey)];
+  return record?.schemaVersion === 1 && record.productKey === productKey ? record : null;
+}
+
+function applyStoredProductResult(record: StoredProductResult): void {
+  state.collection.config = { ...record.crawlConfig };
+  state.collection.keyword = record.queryKeyword || state.collection.keyword;
+  state.collection.keywordTouched = Boolean(record.queryKeyword);
+  state.collection.crawlJob = { ...record.taskStatus };
+  state.collection.formattedPreview = record.formattedPreview;
+  state.collectionResult = record.rawCollectionResult;
+  if (record.noteCount || record.commentCount) {
+    state.collection.crawlJob = { ...state.collection.crawlJob, collected_notes: record.noteCount, collected_comments: record.commentCount };
+  }
+}
+
 function getStoredCollectionTask(): Promise<StoredCollectionTask | null> {
   if (USE_MOCK) return Promise.resolve(null);
   const storage = chromeStorageLocal();
@@ -854,7 +1006,8 @@ function clearStoredCollectionTask(): Promise<void> {
 }
 
 function isSamePageTask(task: StoredCollectionTask, product: PageProduct): boolean {
-  return task.pageUrl === product.page_url || (!!task.sourceProductId && task.sourceProductId === product.source_product_id);
+  const productKey = productKeyFor(product);
+  return task.productKey === productKey || task.pageUrl === product.page_url || (!!task.sourceProductId && task.sourceProductId === product.source_product_id);
 }
 
 function isCollectionRunning(status: string): boolean {
@@ -867,6 +1020,7 @@ function collectionTaskFromRequest(jobId: string, request: CrawlStartRequest): S
     query: request.keyword,
     pageUrl: request.page_product.page_url,
     sourceProductId: request.page_product.source_product_id,
+    productKey: productKeyFor(request.page_product),
   };
 }
 
@@ -958,10 +1112,7 @@ async function checkCrawlerService(): Promise<void> {
       for (let attempt = 0; attempt < 3; attempt += 1) {
         try {
           const authStatus = await crawlerClient.getAuthStatus({}, controller.signal);
-          state.collection.service = { status: authStatus.service_status ?? "connected", checked_at: new Date().toISOString(), message: authStatus.message ?? "本地采集服务已连接" };
-          state.collection.login = authStatus.authenticated === true
-            ? { status: "logged_in", message: authStatus.message ?? "已登录" }
-            : { status: authStatus.status === "unavailable" ? "error" : (authStatus.login_status ?? "not_logged_in"), message: apiErrorText(authStatus.error) ?? authStatus.message ?? state.collection.login.message };
+          applyAuthStatus(authStatus);
           lastError = null;
           break;
         } catch (error: unknown) {
@@ -976,6 +1127,7 @@ async function checkCrawlerService(): Promise<void> {
           state.collection.service = { status: "not_started", checked_at: new Date().toISOString(), message: "无法连接服务：后端未启动或网络不可达" };
         } else {
           state.collection.service = { status: "connected", checked_at: new Date().toISOString(), message: "本地采集服务已连接，但认证状态检查失败" };
+          state.collection.login = { ...state.collection.login, message: "认证状态暂时无法确认，已保留历史结果。" };
         }
       }
     }
@@ -1047,19 +1199,25 @@ async function startCrawl(): Promise<void> {
   }
   try {
     const authStatus = await crawlerClient.getAuthStatus({ refresh: true }, controller.signal);
-    if (authStatus.authenticated !== true) {
+    applyAuthStatus(authStatus);
+    if (authStatus.authenticated !== true && authStatus.status !== "authenticated") {
       state.collection.login = { status: "expired", message: apiErrorText(authStatus.error) ?? authStatus.message ?? "小红书登录状态不存在或已过期，请重新登录" };
       state.collection.formError = validateCrawlReady(state.collection);
       render();
       return;
     }
   } catch (error: unknown) {
-    state.collection.login = { status: "error", message: loginErrorMessage(error) };
+    if (isTemporaryAuthCheckError(error)) {
+      state.collection.service = { status: error instanceof HttpRequestError && error.status === null ? "not_started" : "connected", checked_at: new Date().toISOString(), message: "采集服务认证检查暂时失败，历史结果已保留。" };
+    } else {
+      state.collection.login = { status: "error", message: loginErrorMessage(error) };
+    }
     state.collection.formError = validateCrawlReady(state.collection);
     render();
     return;
   }
   const version = ++crawlPollingVersion;
+  const requestProductKey = productKeyFor(request.page_product);
   collectionRequestInFlight = true;
   state.collection.starting = true;
   state.collection.formattedPreview = null;
@@ -1078,6 +1236,7 @@ async function startCrawl(): Promise<void> {
     const startedJob = await crawlerClient.startCrawl(startRequest, controller.signal);
     if (startedJob.job_id) await saveStoredCollectionTask(collectionTaskFromRequest(startedJob.job_id, startRequest));
     state.collection.crawlJob = startedJob;
+    await saveProductResult(requestProductKey);
     state.collection.starting = false;
     collectionRequestInFlight = false;
     render();
@@ -1103,6 +1262,7 @@ async function startCrawl(): Promise<void> {
       collected_comments: state.collection.crawlJob.collected_comments,
       error_message: error instanceof HttpRequestError && error.status === 409 ? "已有采集任务正在运行，请等待任务完成后重试。" : collectionErrorMessage(error) || "采集任务启动或轮询失败",
     };
+    await saveProductResult(requestProductKey);
     render();
   } finally {
     state.collection.starting = false;
@@ -1112,28 +1272,45 @@ async function startCrawl(): Promise<void> {
 }
 
 async function pollCollectionJob(jobId: string, request: CrawlStartRequest, version: number): Promise<void> {
+  const requestProductKey = productKeyFor(request.page_product);
   state.collection.crawlJob = { ...state.collection.crawlJob, job_id: jobId, status: state.collection.crawlJob.status === "idle" ? "queued" : state.collection.crawlJob.status };
   state.collection.formError = null;
+  await saveProductResult(requestProductKey);
   render();
   while (version === crawlPollingVersion && isCollectionRunning(state.collection.crawlJob.status)) {
     await wait(1000);
     state.collection.crawlJob = await crawlerClient.getCrawlJob(jobId, controller.signal);
+    if (currentProductKey === requestProductKey) await saveProductResult(requestProductKey);
     render();
   }
   if (version !== crawlPollingVersion) return;
   if (state.collection.crawlJob.status === "completed") {
+    if (fetchedCompletedResults.has(jobId)) return;
+    fetchedCompletedResults.add(jobId);
     const result = await crawlerClient.getCollectionResult(jobId, controller.signal);
     const payload = resultPayload(result);
     const preview = previewFromCollectionResponse(result, request);
+    if (currentProductKey !== requestProductKey) {
+      const previousPage = state.pageProduct;
+      state.pageProduct = request.page_product;
+      state.collectionResult = payload;
+      state.collection.formattedPreview = preview;
+      state.collection.crawlJob = { ...state.collection.crawlJob, collected_notes: preview.note_count, collected_comments: preview.comment_count };
+      await saveProductResult(requestProductKey, { rawCollectionResult: payload, formattedPreview: preview, completedAt: new Date().toISOString() });
+      state.pageProduct = previousPage;
+      return;
+    }
     state.collection.formattedPreview = preview;
     state.collectionResult = payload;
     state.collection.crawlJob = { ...state.collection.crawlJob, collected_notes: preview.note_count, collected_comments: preview.comment_count };
+    await saveProductResult(requestProductKey, { rawCollectionResult: payload, formattedPreview: preview, completedAt: new Date().toISOString() });
     await clearStoredCollectionTask();
     render();
     return;
   }
   if (["failed", "timeout", "cancelled"].includes(state.collection.crawlJob.status)) {
     if (state.collection.crawlJob.status === "timeout") state.collection.crawlJob.error_message = state.collection.crawlJob.error_message ?? "任务超时，请重试。";
+    await saveProductResult(requestProductKey);
     await clearStoredCollectionTask();
     render();
   }
@@ -1153,6 +1330,7 @@ async function restoreActiveCollectionTask(): Promise<void> {
     state.collection.crawlJob = await crawlerClient.getCrawlJob(storedTask.jobId, controller.signal);
     render();
     if (isCollectionRunning(state.collection.crawlJob.status)) {
+      await saveProductResult(productKeyFor(state.pageProduct));
       await pollCollectionJob(storedTask.jobId, restoredRequest, version);
       return;
     }
@@ -1163,12 +1341,14 @@ async function restoreActiveCollectionTask(): Promise<void> {
       state.collection.formattedPreview = preview;
       state.collectionResult = payload;
       state.collection.crawlJob = { ...state.collection.crawlJob, collected_notes: preview.note_count, collected_comments: preview.comment_count };
+      await saveProductResult(productKeyFor(state.pageProduct), { rawCollectionResult: payload, formattedPreview: preview, completedAt: new Date().toISOString() });
       await clearStoredCollectionTask();
       render();
       return;
     }
     if (["failed", "timeout", "cancelled"].includes(state.collection.crawlJob.status)) {
       await clearStoredCollectionTask();
+      await saveProductResult(productKeyFor(state.pageProduct));
       render();
     }
   } catch (error: unknown) {
@@ -1204,6 +1384,7 @@ async function cancelCrawl(): Promise<void> {
   }
   state.collection.formattedPreview = null;
   void clearStoredCollectionTask();
+  if (currentProductKey) void saveProductResult(currentProductKey);
   render();
 }
 
@@ -1212,10 +1393,10 @@ function resetCrawlTask(): void {
   state.collection.crawlJob = { job_id: null, status: "idle", stage: "waiting", progress: 0, collected_notes: 0, collected_comments: 0, error_message: null };
   state.collection.formattedPreview = null;
   state.collection.submitMessage = null;
-  state.collectionResult = null;
   state.collection.starting = false;
   collectionRequestInFlight = false;
   void clearStoredCollectionTask();
+  if (currentProductKey) void saveProductResult(currentProductKey);
   render();
 }
 
@@ -1306,6 +1487,23 @@ function apiErrorText(error: unknown): string | null {
   return null;
 }
 
+function applyAuthStatus(authStatus: Awaited<ReturnType<typeof crawlerClient.getAuthStatus>>): void {
+  state.collection.service = { status: authStatus.service_status ?? "connected", checked_at: new Date().toISOString(), message: authStatus.message ?? "本地采集服务已连接" };
+  if (authStatus.authenticated === true || authStatus.status === "authenticated") {
+    state.collection.login = { status: "logged_in", message: authStatus.message ?? "采集服务已登录" };
+    return;
+  }
+  const loginStatus = authStatus.login_status ?? (authStatus.status === "unavailable" ? "error" : "not_logged_in");
+  state.collection.login = {
+    status: loginStatus,
+    message: apiErrorText(authStatus.error) ?? authStatus.message ?? state.collection.login.message,
+  };
+}
+
+function isTemporaryAuthCheckError(error: unknown): boolean {
+  return error instanceof HttpRequestError && (error.status === null || error.status >= 500);
+}
+
 function loginErrorMessage(error: unknown): string {
   if (error instanceof HttpRequestError) return error.message;
   if (error instanceof Error) return error.message;
@@ -1314,7 +1512,7 @@ function loginErrorMessage(error: unknown): string {
 
 async function initialize(): Promise<void> {
   const version = ++initializationVersion;
-  state.view = "loading";
+  state.view = "restoring";
   state.error = null;
   render();
   try {
@@ -1329,20 +1527,19 @@ async function initialize(): Promise<void> {
       return;
     }
     const productChanged = state.pageProduct?.page_url !== page.page_url || state.pageProduct?.source_product_id !== page.source_product_id;
+    const nextProductKey = productKeyFor(page);
     if (productChanged) {
       crawlPollingVersion += 1;
-      loginPollingVersion += 1;
+      currentProductKey = nextProductKey;
       state.collection.crawlJob = { job_id: null, status: "idle", stage: "waiting", progress: 0, collected_notes: 0, collected_comments: 0, error_message: null };
       state.collection.formattedPreview = null;
       state.collection.submitMessage = null;
       state.collectionResult = null;
+      state.collection.keywordTouched = false;
     }
     state.pageProduct = page;
     if (!state.collection.keywordTouched) {
       state.collection.keyword = defaultKeywordForProduct(page);
-    }
-    if (state.collection.service.status === "checking" && !state.collection.service.checked_at) {
-      void checkCrawlerService();
     }
     if (USE_MOCK) {
       state.resolve = await apiClient.resolveProduct(page, controller.signal);
@@ -1356,8 +1553,18 @@ async function initialize(): Promise<void> {
       state.resolve = fallbackResolveForPage(page);
       state.analysis = fallbackAnalysisForPage(page);
     }
+    const cached = await loadProductResult(nextProductKey);
+    if (version !== initializationVersion) return;
+    if (cached) applyStoredProductResult(cached);
     state.view = "ready";
-    if (!USE_MOCK) void restoreActiveCollectionTask();
+    render();
+    if (!USE_MOCK) {
+      await restoreActiveCollectionTask();
+      if (version !== initializationVersion) return;
+      await checkCrawlerService();
+      if (version !== initializationVersion) return;
+    }
+    state.view = "ready";
   } catch (error: unknown) {
     if (error instanceof DOMException && error.name === "AbortError") return;
     state.error = error instanceof ApiError || error instanceof NetworkError ? error : new NetworkError();
