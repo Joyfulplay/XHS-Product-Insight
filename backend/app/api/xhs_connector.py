@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 from concurrent.futures import Executor, Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -22,6 +23,7 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
 
 from app.data.crawlers.xhs_client import (
+    AuthRequiredError,
     XiaohongshuScraper,
     classify_input,
     clean_text,
@@ -33,7 +35,7 @@ from app.services.persistence_service import PersistenceService
 
 router = APIRouter(prefix="/api/v1/xhs", tags=["xhs-connector"])
 
-BrowserName = Literal["auto", "edge", "chrome"]
+BrowserName = Literal["auto", "edge", "chrome", "chromium"]
 JobKind = Literal["login", "collection"]
 JobStatus = Literal["queued", "running", "succeeded", "failed"]
 
@@ -134,6 +136,7 @@ def normalize_collection_dataset(dataset: dict[str, Any]) -> dict[str, Any]:
 
 class LoginRequest(BaseModel):
     browser: BrowserName = "auto"
+    force: bool = False
 
 
 class CollectionRequest(BaseModel):
@@ -182,7 +185,7 @@ class AuthStatusResponse(BaseModel):
     authenticated: bool
     status: Literal["authenticated", "unauthenticated", "unavailable"]
     checked_at: str
-    verification: Literal["local_cookie_presence"]
+    verification: Literal["live", "cached", "missing_cookie", "unavailable"]
     error: ErrorDetail | None = None
 
 
@@ -257,6 +260,9 @@ class XhsConnectorService:
         self.analysis_pipeline = AnalysisPipelineService()
         self.persistence = PersistenceService(PROJECT_ROOT / "data/processed/collection_results")
         self._futures: dict[str, Future[Any]] = {}
+        self._auth_cache: dict[str, Any] | None = None
+        self._auth_cache_at = 0.0
+        self._auth_lock = RLock()
 
     def _build_scraper(self, browser: BrowserName = "auto") -> XiaohongshuScraper:
         return XiaohongshuScraper(
@@ -271,18 +277,19 @@ class XhsConnectorService:
             browser=browser,
         )
 
-    def start_login(self, browser: BrowserName) -> dict[str, Any]:
+    def start_login(self, browser: BrowserName, *, force: bool = False) -> dict[str, Any]:
         existing = self.jobs.active_job("login")
         if existing:
             raise ValueError(existing["job_id"])
         job = self.jobs.create("login")
-        self._futures[job["job_id"]] = self.executor.submit(self._run_login, job["job_id"], browser)
+        self._futures[job["job_id"]] = self.executor.submit(self._run_login, job["job_id"], browser, force)
         return job
 
-    def _run_login(self, job_id: str, browser: BrowserName) -> None:
+    def _run_login(self, job_id: str, browser: BrowserName, force: bool) -> None:
         self.jobs.update(job_id, status="running", stage="waiting_for_login", progress=0.1)
         try:
-            self._build_scraper(browser).login()
+            self._build_scraper(browser).login(force=force)
+            self.auth_status(refresh=True, require_authenticated=True)
         except Exception as exc:
             error = translate_client_exception(exc)
             self.jobs.update(
@@ -308,6 +315,7 @@ class XhsConnectorService:
     def _run_collection(self, job_id: str, source: str, query_override: str | None) -> None:
         self.jobs.update(job_id, status="running", stage="collecting", progress=0.1)
         try:
+            self.auth_status(refresh=True, require_authenticated=True)
             dataset = self._build_scraper().collect(source, query_override=query_override)
             result = normalize_collection_dataset(dataset)
             self.jobs.update(job_id, stage="cleaning", progress=0.55)
@@ -335,26 +343,46 @@ class XhsConnectorService:
             result=result,
         )
 
-    def auth_status(self) -> dict[str, Any]:
+    def auth_status(self, *, refresh: bool = False, require_authenticated: bool = False) -> dict[str, Any]:
+        with self._auth_lock:
+            if not refresh and self._auth_cache is not None and time.monotonic() - self._auth_cache_at < 60:
+                cached = {**self._auth_cache, "verification": "cached"}
+                if require_authenticated and not cached["authenticated"]:
+                    raise AuthRequiredError((cached.get("error") or {}).get("message", "小红书登录状态不存在或已过期，请重新登录"))
+                return cached
+
         try:
-            _, load_saved_cookies, _ = XiaohongshuScraper._import_client_components()
-            cookies = load_saved_cookies()
-            valid = XiaohongshuScraper._has_required_login_cookies(cookies)
+            self._build_scraper().validate_saved_login()
+            result = {
+                "authenticated": True,
+                "status": "authenticated",
+                "checked_at": utc_now(),
+                "verification": "live",
+            }
+        except AuthRequiredError as exc:
+            result = {
+                "authenticated": False,
+                "status": "unauthenticated",
+                "checked_at": utc_now(),
+                "verification": "missing_cookie" if "没有找到" in str(exc) else "live",
+                "error": {"code": exc.code, "message": clean_text(exc)[:500]},
+            }
         except Exception as exc:
             error = translate_client_exception(exc)
-            return {
+            result = {
                 "authenticated": False,
                 "status": "unavailable",
                 "checked_at": utc_now(),
-                "verification": "local_cookie_presence",
+                "verification": "unavailable",
                 "error": {"code": error.code, "message": clean_text(error)[:500]},
             }
-        return {
-            "authenticated": valid,
-            "status": "authenticated" if valid else "unauthenticated",
-            "checked_at": utc_now(),
-            "verification": "local_cookie_presence",
-        }
+        if result["status"] != "unavailable":
+            with self._auth_lock:
+                self._auth_cache = result
+                self._auth_cache_at = time.monotonic()
+        if require_authenticated and not result["authenticated"]:
+            raise AuthRequiredError((result.get("error") or {}).get("message", "小红书登录状态不存在或已过期，请重新登录"))
+        return result
 
 
 service = XhsConnectorService()
@@ -370,7 +398,7 @@ def get_job_or_404(job_id: str, expected_kind: JobKind) -> dict[str, Any]:
 @router.post("/auth/login", response_model=JobResponse, status_code=status.HTTP_202_ACCEPTED)
 def start_login(request: LoginRequest) -> dict[str, Any]:
     try:
-        return JobStore.public(service.start_login(request.browser))
+        return JobStore.public(service.start_login(request.browser, force=request.force))
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -384,8 +412,8 @@ def get_login_job(job_id: str) -> dict[str, Any]:
 
 
 @router.get("/auth/status", response_model=AuthStatusResponse)
-def get_auth_status() -> dict[str, Any]:
-    return service.auth_status()
+def get_auth_status(refresh: bool = False) -> dict[str, Any]:
+    return service.auth_status(refresh=refresh)
 
 
 @router.post("/collections", response_model=JobResponse, status_code=status.HTTP_202_ACCEPTED)

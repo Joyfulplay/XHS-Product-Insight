@@ -257,13 +257,14 @@ export interface XiaohongshuLoginState {
   message: string | null;
 }
 
-export type BrowserChoice = "auto" | "edge" | "chrome";
+export type BrowserChoice = "auto" | "edge" | "chrome" | "chromium";
 
 export interface AuthStatusResponse {
   service_status?: CrawlerServiceStatus;
   login_status?: XiaohongshuLoginStatus;
   authenticated?: boolean;
   status?: "authenticated" | "unauthenticated" | "unavailable";
+  verification?: "live" | "cached" | "missing_cookie" | "unavailable";
   message?: string | null;
   error?: string | { code?: string; message?: string } | null;
 }

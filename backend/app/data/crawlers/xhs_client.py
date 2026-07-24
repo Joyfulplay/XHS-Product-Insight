@@ -20,12 +20,14 @@ import hashlib
 import html
 import json
 import re
+import shutil
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import parse_qs, unquote, urljoin, urlparse
+from uuid import uuid4
 
 
 # ---------------------------------------------------------------------------
@@ -44,6 +46,7 @@ REQUIRED_LOGIN_COOKIES = ("a1", "webId", "web_session")
 BROWSER_CHANNELS = {
     "edge": "msedge",
     "chrome": "chrome",
+    "chromium": None,
 }
 XHS_NOTE_PATH = re.compile(r"/(?:explore|discovery/item|search_result)/([A-Za-z0-9]+)")
 SUPPORTED_PRODUCT_HOSTS = ("taobao.com", "tmall.com")
@@ -458,7 +461,7 @@ class XiaohongshuScraper:
             ) from exc
         return XhsClient, load_saved_cookies, get_cookie_path
 
-    def login(self) -> Path:
+    def login(self, *, force: bool = False) -> Path:
         """使用系统 Edge/Chrome 扫码登录，并保存浏览器产生的 Cookie。"""
 
         try:
@@ -469,40 +472,50 @@ class XiaohongshuScraper:
                 "缺少 Playwright 或 xiaohongshu-cli，请先安装爬虫 requirements.txt"
             ) from exc
 
-        with sync_playwright() as playwright:
-            context, browser_name = self._launch_system_browser(playwright, headless=False)
-            try:
-                page = context.pages[0] if context.pages else context.new_page()
-                self._navigate_to_login(page)
-
-                cookies = self._browser_cookies(context)
-                login_prompt_visible = self._has_visible_login_prompt(page)
-                already_logged_in = (
-                    self._has_required_login_cookies(cookies)
-                    and self._has_logged_in_marker(page)
-                    and not login_prompt_visible
+        temporary_profile = self.profile_dir / f"forced-login-{uuid4().hex}" if force else None
+        try:
+            with sync_playwright() as playwright:
+                context, browser_name = self._launch_system_browser(
+                    playwright,
+                    headless=False,
+                    profile_dir=temporary_profile,
                 )
-                if not already_logged_in:
-                    initial_session = cookies.get("web_session", "")
-                    self._open_login_prompt(page)
-                    print(
-                        f"已打开系统 {browser_name.title()}，请使用小红书 App 扫码并在手机上确认登录。"
-                    )
-                    print("登录完成前请不要关闭浏览器，最长等待 5 分钟。")
-                    cookies = self._wait_for_login_cookies(
-                        context,
-                        page,
-                        timeout_seconds=LOGIN_TIMEOUT_SECONDS,
-                        initial_session=initial_session,
-                        prompt_seen=login_prompt_visible,
-                    )
-                else:
-                    print(f"系统 {browser_name.title()} 的独立配置已经登录。")
+                try:
+                    page = context.pages[0] if context.pages else context.new_page()
+                    self._navigate_to_login(page)
 
-                # save_cookies 会附加 saved_at；浏览器 Cookie 本身不包含本地元数据。
-                save_cookies(cookies)
-            finally:
-                context.close()
+                    cookies = self._browser_cookies(context)
+                    login_prompt_visible = self._has_visible_login_prompt(page)
+                    already_logged_in = (
+                        not force
+                        and self._has_required_login_cookies(cookies)
+                        and self._has_logged_in_marker(page)
+                        and not login_prompt_visible
+                    )
+                    if not already_logged_in:
+                        initial_session = cookies.get("web_session", "")
+                        self._open_login_prompt(page)
+                        print(
+                            f"已打开系统 {browser_name.title()}，请使用小红书 App 扫码并在手机上确认登录。"
+                        )
+                        print("登录完成前请不要关闭浏览器，最长等待 5 分钟。")
+                        cookies = self._wait_for_login_cookies(
+                            context,
+                            page,
+                            timeout_seconds=LOGIN_TIMEOUT_SECONDS,
+                            initial_session=initial_session,
+                            prompt_seen=login_prompt_visible,
+                        )
+                    else:
+                        print(f"系统 {browser_name.title()} 的独立配置已经登录。")
+
+                    # save_cookies 会附加 saved_at；仅在扫码确认后替换旧会话。
+                    save_cookies(cookies)
+                finally:
+                    context.close()
+        finally:
+            if temporary_profile is not None:
+                shutil.rmtree(temporary_profile, ignore_errors=True)
         return get_cookie_path()
 
     @staticmethod
@@ -523,30 +536,36 @@ class XiaohongshuScraper:
         """返回浏览器尝试顺序；显式指定时不做其他回退。"""
 
         if self.browser == "auto":
-            return ("edge", "chrome")
+            return ("edge", "chrome", "chromium")
         return (self.browser,)
 
-    def _launch_system_browser(self, playwright: Any, headless: bool) -> tuple[Any, str]:
+    def _launch_system_browser(
+        self,
+        playwright: Any,
+        headless: bool,
+        profile_dir: Path | None = None,
+    ) -> tuple[Any, str]:
         """启动系统 Edge/Chrome，并为每种浏览器使用独立资料目录。"""
 
         failures: list[str] = []
         for browser_name in self._browser_candidates():
             channel = BROWSER_CHANNELS[browser_name]
-            browser_profile = self.profile_dir / browser_name
+            browser_profile = (profile_dir or self.profile_dir) / browser_name
             browser_profile.mkdir(parents=True, exist_ok=True)
             try:
-                context = playwright.chromium.launch_persistent_context(
-                    str(browser_profile),
-                    channel=channel,
-                    headless=headless,
-                    viewport={"width": 1440, "height": 1000},
-                )
+                launch_options = {
+                    "headless": headless,
+                    "viewport": {"width": 1440, "height": 1000},
+                }
+                if channel:
+                    launch_options["channel"] = channel
+                context = playwright.chromium.launch_persistent_context(str(browser_profile), **launch_options)
                 print(f"正在使用系统 {browser_name.title()}。")
                 return context, browser_name
             except Exception as exc:
                 failures.append(f"{browser_name}: {clean_text(exc)[:160]}")
 
-        requested = "Edge 或 Chrome" if self.browser == "auto" else self.browser.title()
+        requested = "Edge、Chrome 或 Playwright Chromium" if self.browser == "auto" else self.browser.title()
         detail = "；".join(failures)
         raise BrowserNotFoundError(
             f"无法启动系统 {requested}。请确认浏览器已安装且配置目录未被占用。{detail}"
@@ -713,6 +732,17 @@ class XiaohongshuScraper:
             request_delay=self.delay,
             max_retries=3,
         )
+
+    def validate_saved_login(self) -> None:
+        """Call an authenticated endpoint so guest or expired cookies are never trusted."""
+
+        client = self._open_client()
+        try:
+            client.get_self_info()
+        except Exception as exc:
+            raise translate_client_exception(exc) from exc
+        finally:
+            client.close()
 
     def collect(
         self,

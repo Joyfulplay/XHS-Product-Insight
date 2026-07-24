@@ -76,7 +76,7 @@ class FakeChromium:
         self.channels = []
 
     def launch_persistent_context(self, _profile, **kwargs):
-        self.channels.append(kwargs["channel"])
+        self.channels.append(kwargs.get("channel"))
         result = self.results.pop(0)
         if isinstance(result, Exception):
             raise result
@@ -109,6 +109,20 @@ def test_auto_browser_falls_back_to_chrome():
     assert launched is context
     assert browser_name == "chrome"
     assert chromium.channels == ["msedge", "chrome"]
+
+
+def test_auto_browser_falls_back_to_playwright_chromium():
+    context = FakeContext()
+    chromium = FakeChromium([RuntimeError("edge missing"), RuntimeError("chrome missing"), context])
+
+    launched, browser_name = make_scraper()._launch_system_browser(
+        SimpleNamespace(chromium=chromium),
+        headless=False,
+    )
+
+    assert launched is context
+    assert browser_name == "chromium"
+    assert chromium.channels == ["msedge", "chrome", None]
 
 
 def test_explicit_browser_does_not_fall_back():
@@ -270,6 +284,47 @@ def test_login_saves_browser_cookies(monkeypatch):
     ]
     assert page.visited
     assert context.closed
+
+
+def test_validate_saved_login_uses_authenticated_current_user_endpoint(monkeypatch):
+    class FakeClient:
+        def __init__(self):
+            self.called = False
+            self.closed = False
+
+        def get_self_info(self):
+            self.called = True
+            return {"user_id": "account"}
+
+        def close(self):
+            self.closed = True
+
+    client = FakeClient()
+    scraper = make_scraper()
+    monkeypatch.setattr(scraper, "_open_client", lambda: client)
+
+    scraper.validate_saved_login()
+
+    assert client.called
+    assert client.closed
+
+
+def test_validate_saved_login_maps_minus_104_to_auth_required(monkeypatch):
+    class FakeClient:
+        def get_self_info(self):
+            error = Exception("API error")
+            error.code = -104
+            error.response = {"code": -104}
+            raise error
+
+        def close(self):
+            return None
+
+    scraper = make_scraper()
+    monkeypatch.setattr(scraper, "_open_client", FakeClient)
+
+    with pytest.raises(AuthRequiredError):
+        scraper.validate_saved_login()
 
 
 def test_api_minus_104_maps_to_auth_required():

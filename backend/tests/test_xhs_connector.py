@@ -10,6 +10,7 @@ from app.api.xhs_connector import (
     XhsConnectorService,
     normalize_collection_dataset,
 )
+from app.data.crawlers.xhs_client import AuthRequiredError
 
 
 class ImmediateExecutor:
@@ -23,15 +24,26 @@ class ImmediateExecutor:
 
 
 class FakeScraper:
-    def __init__(self, dataset=None, error=None):
+    def __init__(self, dataset=None, error=None, auth_error=None):
         self.dataset = dataset
         self.error = error
+        self.auth_error = auth_error
+        self.login_force = None
+        self.auth_checks = 0
+        self.collection_calls = 0
 
-    def login(self):
+    def login(self, *, force=False):
+        self.login_force = force
         if self.error:
             raise self.error
 
+    def validate_saved_login(self):
+        self.auth_checks += 1
+        if self.auth_error:
+            raise self.auth_error
+
     def collect(self, source, query_override=None):
+        self.collection_calls += 1
         if self.error:
             raise self.error
         return self.dataset
@@ -100,6 +112,58 @@ def test_collection_job_returns_desensitized_result():
     completed = service.jobs.get(job["job_id"])
     assert completed["status"] == "succeeded"
     assert completed["result"]["input"] == {"source": "taobao_or_tmall", "query": "耳机"}
+
+
+def test_auth_status_rejects_guest_or_expired_sessions_and_caches_live_result():
+    scraper = FakeScraper(auth_error=AuthRequiredError("当前保存的是游客会话或登录已失效，请重新登录"))
+    service = FakeConnectorService(scraper)
+
+    first = service.auth_status(refresh=True)
+    cached = service.auth_status()
+    refreshed = service.auth_status(refresh=True)
+
+    assert first["authenticated"] is False
+    assert first["status"] == "unauthenticated"
+    assert first["verification"] == "live"
+    assert cached["verification"] == "cached"
+    assert refreshed["verification"] == "live"
+    assert scraper.auth_checks == 2
+
+
+def test_forced_login_uses_a_fresh_login_task_and_rechecks_authentication():
+    scraper = FakeScraper()
+    service = FakeConnectorService(scraper)
+
+    job = service.start_login("auto", force=True)
+    completed = service.jobs.get(job["job_id"])
+
+    assert completed["status"] == "succeeded"
+    assert scraper.login_force is True
+    assert scraper.auth_checks == 1
+
+
+def test_login_job_fails_when_the_new_session_cannot_pass_live_authentication():
+    scraper = FakeScraper(auth_error=AuthRequiredError("当前保存的是游客会话或登录已失效，请重新登录"))
+    service = FakeConnectorService(scraper)
+
+    job = service.start_login("auto", force=True)
+    completed = service.jobs.get(job["job_id"])
+
+    assert completed["status"] == "failed"
+    assert completed["error"]["code"] == "AUTH_REQUIRED"
+    assert scraper.login_force is True
+
+
+def test_collection_stops_before_crawler_when_live_authentication_fails():
+    scraper = FakeScraper(auth_error=AuthRequiredError("小红书登录状态不存在或已过期，请重新登录"))
+    service = FakeConnectorService(scraper)
+
+    job = service.start_collection(CollectionRequest(source="索尼 XM5"))
+    completed = service.jobs.get(job["job_id"])
+
+    assert completed["status"] == "failed"
+    assert completed["error"]["code"] == "AUTH_REQUIRED"
+    assert scraper.collection_calls == 0
 
 
 def test_collection_endpoints_return_a_finished_desensitized_job(monkeypatch):
