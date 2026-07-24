@@ -23,6 +23,7 @@ import type {
   EvidenceData,
   EvidenceQuery,
   CrawlStartRequest,
+  CollectionResultResponse,
   FormattedCrawlerDataPreview,
   PageProduct,
   ProductAnalysisData,
@@ -303,6 +304,22 @@ function resultPayload(result: unknown): unknown {
   return record.analysis ?? record.data ?? record.result ?? record.raw ?? result;
 }
 
+function numberAtPath(input: unknown, path: string): number | null {
+  const value = path.split(".").reduce<unknown>((current, key) => {
+    if (!current || typeof current !== "object") return undefined;
+    return (current as Record<string, unknown>)[key];
+  }, input);
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function firstNumberAtPath(input: unknown, paths: string[]): number | null {
+  for (const path of paths) {
+    const value = numberAtPath(input, path);
+    if (value !== null) return value;
+  }
+  return null;
+}
+
 function previewFromCollectionResult(result: unknown, request: CrawlStartRequest): FormattedCrawlerDataPreview {
   const view = normalizeAnalysisResult(result);
   return {
@@ -312,6 +329,57 @@ function previewFromCollectionResult(result: unknown, request: CrawlStartRequest
     note_count: view.sample.note_count,
     comment_count: view.sample.raw_comment_count ?? 0,
     generated_at: new Date().toISOString(),
+  };
+}
+
+function previewFromCollectionResponse(result: CollectionResultResponse, request: CrawlStartRequest): FormattedCrawlerDataPreview {
+  const payload = resultPayload(result);
+  const normalizedPreview = previewFromCollectionResult(payload, request);
+  const noteCount = firstNumberAtPath(payload, [
+    "collection.note_count",
+    "data.collection.note_count",
+    "result.collection.note_count",
+    "raw.collection.note_count",
+    "raw.data.collection.note_count",
+    "sample.note_count",
+    "sample.notes_count",
+    "statistics.note_count",
+    "statistics.notes_count",
+    "stats.note_count",
+    "stats.notes_count",
+    "counts.note_count",
+    "counts.notes",
+    "coverage.note_count",
+    "coverage.notes_count",
+    "note_count",
+    "notes_count",
+  ]);
+  const commentCount = firstNumberAtPath(payload, [
+    "collection.comment_count",
+    "data.collection.comment_count",
+    "result.collection.comment_count",
+    "raw.collection.comment_count",
+    "raw.data.collection.comment_count",
+    "sample.raw_comment_count",
+    "sample.comment_count",
+    "sample.comments_count",
+    "statistics.raw_comment_count",
+    "statistics.comment_count",
+    "statistics.comments_count",
+    "stats.raw_comment_count",
+    "stats.total_comments",
+    "counts.raw_comments",
+    "coverage.comment_count",
+    "coverage.total_comment_count",
+    "raw_comment_count",
+    "comment_count",
+    "comments_count",
+  ]);
+  return {
+    ...normalizedPreview,
+    ...result.formatted_preview,
+    note_count: noteCount ?? result.formatted_preview?.note_count ?? normalizedPreview.note_count,
+    comment_count: commentCount ?? result.formatted_preview?.comment_count ?? normalizedPreview.comment_count,
   };
 }
 
@@ -1056,7 +1124,7 @@ async function pollCollectionJob(jobId: string, request: CrawlStartRequest, vers
   if (state.collection.crawlJob.status === "completed") {
     const result = await crawlerClient.getCollectionResult(jobId, controller.signal);
     const payload = resultPayload(result);
-    const preview = result?.formatted_preview ?? previewFromCollectionResult(payload, request);
+    const preview = previewFromCollectionResponse(result, request);
     state.collection.formattedPreview = preview;
     state.collectionResult = payload;
     state.collection.crawlJob = { ...state.collection.crawlJob, collected_notes: preview.note_count, collected_comments: preview.comment_count };
@@ -1091,7 +1159,7 @@ async function restoreActiveCollectionTask(): Promise<void> {
     if (state.collection.crawlJob.status === "completed") {
       const result = await crawlerClient.getCollectionResult(storedTask.jobId, controller.signal);
       const payload = resultPayload(result);
-      const preview = result?.formatted_preview ?? previewFromCollectionResult(payload, restoredRequest);
+      const preview = previewFromCollectionResponse(result, restoredRequest);
       state.collection.formattedPreview = preview;
       state.collectionResult = payload;
       state.collection.crawlJob = { ...state.collection.crawlJob, collected_notes: preview.note_count, collected_comments: preview.comment_count };
