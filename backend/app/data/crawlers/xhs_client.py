@@ -26,7 +26,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import parse_qs, unquote, urljoin, urlparse
+from urllib.parse import parse_qs, unquote, urlencode, urljoin, urlparse
 from uuid import uuid4
 
 
@@ -251,6 +251,22 @@ def canonical_note_url(note_id: str) -> str:
     """构造不包含 xsec_token 的规范笔记地址。"""
 
     return f"{XHS_HOME}/explore/{note_id}"
+
+
+PRIVATE_NOTE_OPEN_URL_FIELD = "_xhs_open_url"
+
+
+def note_open_url(note_id: str, xsec_token: str, xsec_source: str) -> str:
+    """Keep the crawler-only original-note URL out of public result data."""
+
+    query = {}
+    if xsec_token:
+        query["xsec_token"] = xsec_token
+    if xsec_source:
+        query["xsec_source"] = xsec_source
+    if not query:
+        return canonical_note_url(note_id)
+    return f"{canonical_note_url(note_id)}?{urlencode(query)}"
 
 
 def note_reference_from_url(url: str) -> tuple[str, str, str]:
@@ -1128,6 +1144,11 @@ class XiaohongshuScraper:
         return {
             "note_id": note_id,
             "url": url,
+            PRIVATE_NOTE_OPEN_URL_FIELD: note_open_url(
+                note_id,
+                clean_text(candidate.get("xsec_token")),
+                clean_text(candidate.get("xsec_source")),
+            ),
             "search_query": search_query,
             "search_rank": candidate.get("search_rank"),
             "title": title,

@@ -12,7 +12,7 @@ import re
 import time
 from concurrent.futures import Executor, Future, ThreadPoolExecutor
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import RLock
 from typing import Any, Literal
@@ -20,10 +20,12 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, status
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field, field_validator
 
 from app.data.crawlers.xhs_client import (
     AuthRequiredError,
+    PRIVATE_NOTE_OPEN_URL_FIELD,
     XiaohongshuScraper,
     classify_input,
     clean_text,
@@ -68,6 +70,9 @@ SENSITIVE_QUERY_NAMES = {
 NORMALIZED_SENSITIVE_FIELD_NAMES = {normalized for name in SENSITIVE_FIELD_NAMES if (normalized := re.sub(r"[^a-z0-9]", "", name.lower()))}
 NORMALIZED_SENSITIVE_QUERY_NAMES = {normalized for name in SENSITIVE_QUERY_NAMES if (normalized := re.sub(r"[^a-z0-9]", "", name.lower()))}
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
+LOCAL_API_BASE_URL = "http://127.0.0.1:8000/api/v1"
+NOTE_OPEN_LINK_TTL_SECONDS = 30 * 60
+XHS_OPEN_HOSTS = {"xiaohongshu.com", "www.xiaohongshu.com"}
 
 
 def utc_now() -> str:
@@ -99,7 +104,7 @@ def sanitize_url(value: str) -> str:
 def sanitize_value(value: Any, key: str | None = None) -> Any:
     """Defence in depth: prevent future crawler changes from leaking secrets."""
 
-    if key is not None and is_sensitive_field(key):
+    if key == PRIVATE_NOTE_OPEN_URL_FIELD or (key is not None and is_sensitive_field(key)):
         return None
     if isinstance(value, dict):
         return {
@@ -265,6 +270,8 @@ class XhsConnectorService:
         self._auth_cache: dict[str, Any] | None = None
         self._auth_cache_at = 0.0
         self._auth_lock = RLock()
+        self._note_open_links: dict[str, dict[str, tuple[str, datetime]]] = {}
+        self._note_open_links_lock = RLock()
 
     def _build_scraper(
         self,
@@ -324,20 +331,28 @@ class XhsConnectorService:
         self.jobs.update(job_id, status="running", stage="collecting", progress=0.1)
         try:
             self.auth_status(refresh=True, require_authenticated=True)
+<<<<<<< HEAD
             scraper = self._build_scraper(
                 max_notes=request.max_notes,
                 max_comments=request.max_comments_per_note,
             )
             dataset = scraper.collect(request.source, query_override=request.query_override)
+=======
+            dataset = self._build_scraper().collect(source, query_override=query_override)
+            note_open_links = self._extract_note_open_links(dataset)
+>>>>>>> db3cb2a (fix: add temporary XHS note redirects)
             result = normalize_collection_dataset(dataset)
             self.jobs.update(job_id, stage="cleaning", progress=0.55)
             analysis_result = self.analysis_pipeline.run(result).model_dump(mode="json")
+            expires_at = self._store_note_open_links(job_id, note_open_links)
+            self._attach_note_open_urls(analysis_result, job_id, note_open_links, expires_at)
             self.jobs.update(job_id, stage="statistical_analysis", progress=0.85)
             result = {**result, **analysis_result}
             self.jobs.update(job_id, stage="persisting", progress=0.95)
             storage_path = self.persistence.save(job_id, result)
             result = {**result, "storage": {"path": storage_path}}
         except Exception as exc:
+            self._discard_note_open_links(job_id)
             error = translate_client_exception(exc)
             self.jobs.update(
                 job_id,
@@ -354,6 +369,82 @@ class XhsConnectorService:
             progress=1.0,
             result=result,
         )
+
+    @staticmethod
+    def _extract_note_open_links(dataset: dict[str, Any]) -> dict[str, str]:
+        links: dict[str, str] = {}
+        for note in dataset.get("notes", []):
+            if not isinstance(note, dict):
+                continue
+            note_id = clean_text(note.get("note_id"))
+            target = clean_text(note.get(PRIVATE_NOTE_OPEN_URL_FIELD))
+            parsed = urlsplit(target)
+            query_names = {normalized_field_name(key) for key, _ in parse_qsl(parsed.query, keep_blank_values=True)}
+            path_note_id = clean_text(parsed.path.rstrip("/").rsplit("/", 1)[-1])
+            if (
+                note_id
+                and parsed.scheme == "https"
+                and (parsed.hostname or "").lower() in XHS_OPEN_HOSTS
+                and parsed.path.startswith("/explore/")
+                and path_note_id == note_id
+                and "xsectoken" in query_names
+            ):
+                links[note_id] = target
+        return links
+
+    def _store_note_open_links(self, job_id: str, links: dict[str, str]) -> datetime:
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=NOTE_OPEN_LINK_TTL_SECONDS)
+        with self._note_open_links_lock:
+            self._prune_note_open_links_locked()
+            self._note_open_links[job_id] = {
+                note_id: (target, expires_at)
+                for note_id, target in links.items()
+            }
+        return expires_at
+
+    def _prune_note_open_links_locked(self) -> None:
+        now = datetime.now(timezone.utc)
+        for job_id, links in list(self._note_open_links.items()):
+            valid_links = {
+                note_id: item
+                for note_id, item in links.items()
+                if item[1] > now
+            }
+            if valid_links:
+                self._note_open_links[job_id] = valid_links
+            else:
+                self._note_open_links.pop(job_id, None)
+
+    def _discard_note_open_links(self, job_id: str) -> None:
+        with self._note_open_links_lock:
+            self._note_open_links.pop(job_id, None)
+
+    @staticmethod
+    def _note_open_url(job_id: str, note_id: str) -> str:
+        return f"{LOCAL_API_BASE_URL}/xhs/collections/{job_id}/notes/{note_id}/open"
+
+    def _attach_note_open_urls(
+        self,
+        analysis: dict[str, Any],
+        job_id: str,
+        links: dict[str, str],
+        expires_at: datetime,
+    ) -> None:
+        expires_at_value = expires_at.isoformat(timespec="seconds")
+        for note in analysis.get("representative_notes", []):
+            if not isinstance(note, dict):
+                continue
+            note_id = clean_text(note.get("note_id"))
+            if not note_id:
+                continue
+            note["source_url"] = self._note_open_url(job_id, note_id)
+            note["link_expires_at"] = expires_at_value if note_id in links else None
+
+    def note_open_url(self, job_id: str, note_id: str) -> str | None:
+        with self._note_open_links_lock:
+            self._prune_note_open_links_locked()
+            item = self._note_open_links.get(job_id, {}).get(note_id)
+            return item[0] if item else None
 
     def auth_status(self, *, refresh: bool = False, require_authenticated: bool = False) -> dict[str, Any]:
         with self._auth_lock:
@@ -452,3 +543,11 @@ def get_collection_result(job_id: str) -> dict[str, Any]:
     if job["status"] != "succeeded":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="采集任务尚未完成")
     return job["result"]
+
+
+@router.get("/collections/{job_id}/notes/{note_id}/open", include_in_schema=False)
+def open_collection_note(job_id: str, note_id: str) -> RedirectResponse:
+    target = service.note_open_url(job_id, note_id)
+    if target is None:
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="原文链接已过期，请重新采集")
+    return RedirectResponse(target, status_code=status.HTTP_307_TEMPORARY_REDIRECT)

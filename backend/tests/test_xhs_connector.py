@@ -10,6 +10,7 @@ from app.api.xhs_connector import (
     XhsConnectorService,
     normalize_collection_dataset,
 )
+from app.services.persistence_service import PersistenceService
 from app.data.crawlers.xhs_client import AuthRequiredError
 
 
@@ -62,6 +63,7 @@ class FakeConnectorService(XhsConnectorService):
         return self.scraper
 
 
+<<<<<<< HEAD
 def test_collection_request_defaults_and_custom_limits_reach_the_scraper():
     dataset = {
         "schema_version": "1.1",
@@ -104,6 +106,11 @@ def test_collection_endpoint_rejects_out_of_range_limits(payload):
     response = TestClient(app).post("/api/v1/xhs/collections", json=payload)
 
     assert response.status_code == 422
+=======
+class FailingPersistence:
+    def save(self, key, payload):
+        raise OSError("persistence failed")
+>>>>>>> db3cb2a (fix: add temporary XHS note redirects)
 
 
 def test_collection_request_accepts_a_product_keyword():
@@ -160,6 +167,162 @@ def test_collection_job_returns_desensitized_result():
     completed = service.jobs.get(job["job_id"])
     assert completed["status"] == "succeeded"
     assert completed["result"]["input"] == {"source": "taobao_or_tmall", "query": "耳机"}
+
+
+def test_collection_keeps_full_note_link_only_in_memory(tmp_path):
+    full_note_url = "https://www.xiaohongshu.com/explore/note-1?xsec_token=private-token&xsec_source=pc_search"
+    scraper = FakeScraper(
+        {
+            "schema_version": "1.1",
+            "input": {"type": "keyword", "resolved_query": "耳机"},
+            "collection": {"note_count": 1, "comment_count": 0},
+            "notes": [
+                {
+                    "note_id": "note-1",
+                    "url": "https://www.xiaohongshu.com/explore/note-1",
+                    "_xhs_open_url": full_note_url,
+                    "title": "公开笔记",
+                    "text": "公开内容",
+                    "comments": [],
+                    "engagement": {"likes": 1},
+                }
+            ],
+            "errors": [],
+        }
+    )
+    service = FakeConnectorService(scraper)
+    service.persistence = PersistenceService(tmp_path)
+
+    job = service.start_collection(CollectionRequest(source="耳机"))
+    completed = service.jobs.get(job["job_id"])
+    representative = completed["result"]["representative_notes"][0]
+    persisted = (tmp_path / f"{job['job_id']}.json").read_text(encoding="utf-8")
+
+    assert representative["source_url"].endswith(f"/collections/{job['job_id']}/notes/note-1/open")
+    assert representative["link_expires_at"] is not None
+    assert "private-token" not in str(completed["result"])
+    assert "xsec_token" not in str(completed["result"])
+    assert "private-token" not in persisted
+    assert "xsec_token" not in persisted
+    assert service.note_open_url(job["job_id"], "note-1") == full_note_url
+
+
+def test_collection_does_not_fallback_to_a_canonical_note_url_without_a_full_link():
+    scraper = FakeScraper(
+        {
+            "schema_version": "1.1",
+            "input": {"type": "keyword", "resolved_query": "耳机"},
+            "collection": {"note_count": 1, "comment_count": 0},
+            "notes": [
+                {
+                    "note_id": "note-1",
+                    "url": "https://www.xiaohongshu.com/explore/note-1",
+                    "_xhs_open_url": "https://www.xiaohongshu.com/explore/note-1",
+                    "title": "公开笔记",
+                    "text": "公开内容",
+                    "comments": [],
+                    "engagement": {"likes": 1},
+                }
+            ],
+            "errors": [],
+        }
+    )
+    service = FakeConnectorService(scraper)
+
+    job = service.start_collection(CollectionRequest(source="耳机"))
+    completed = service.jobs.get(job["job_id"])
+    representative = completed["result"]["representative_notes"][0]
+
+    assert representative["source_url"].endswith(f"/collections/{job['job_id']}/notes/note-1/open")
+    assert representative["link_expires_at"] is None
+    assert service.note_open_url(job["job_id"], "note-1") is None
+
+
+def test_collection_failure_discards_temporary_note_links():
+    scraper = FakeScraper(
+        {
+            "schema_version": "1.1",
+            "input": {"type": "keyword", "resolved_query": "耳机"},
+            "collection": {"note_count": 1, "comment_count": 0},
+            "notes": [
+                {
+                    "note_id": "note-1",
+                    "url": "https://www.xiaohongshu.com/explore/note-1",
+                    "_xhs_open_url": "https://www.xiaohongshu.com/explore/note-1?xsec_token=private-token&xsec_source=pc_search",
+                    "title": "公开笔记",
+                    "text": "公开内容",
+                    "comments": [],
+                    "engagement": {"likes": 1},
+                }
+            ],
+            "errors": [],
+        }
+    )
+    service = FakeConnectorService(scraper)
+    service.persistence = FailingPersistence()
+
+    job = service.start_collection(CollectionRequest(source="耳机"))
+    completed = service.jobs.get(job["job_id"])
+
+    assert completed["status"] == "failed"
+    assert service.note_open_url(job["job_id"], "note-1") is None
+
+
+def test_note_open_endpoint_redirects_and_expires(monkeypatch):
+    service = XhsConnectorService(job_store=JobStore(), executor=ImmediateExecutor())
+    job = service.jobs.create("collection")
+    target = "https://www.xiaohongshu.com/explore/note-1?xsec_token=private-token&xsec_source=pc_search"
+    service._store_note_open_links(job["job_id"], {"note-1": target})
+    monkeypatch.setattr(xhs_connector, "service", service)
+
+    from main import app
+
+    client = TestClient(app)
+    response = client.get(
+        f"/api/v1/xhs/collections/{job['job_id']}/notes/note-1/open",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 307
+    assert response.headers["location"] == target
+
+    monkeypatch.setattr(xhs_connector, "NOTE_OPEN_LINK_TTL_SECONDS", -1)
+    service._store_note_open_links(job["job_id"], {"note-1": target})
+    expired = client.get(
+        f"/api/v1/xhs/collections/{job['job_id']}/notes/note-1/open",
+        follow_redirects=False,
+    )
+
+    assert expired.status_code == 410
+    assert "链接已过期" in expired.json()["detail"]
+
+
+def test_note_open_links_do_not_cross_collection_jobs():
+    service = XhsConnectorService(job_store=JobStore(), executor=ImmediateExecutor())
+    first = service.jobs.create("collection")
+    second = service.jobs.create("collection")
+    first_target = "https://www.xiaohongshu.com/explore/note-1?xsec_token=first&xsec_source=pc_search"
+    second_target = "https://www.xiaohongshu.com/explore/note-1?xsec_token=second&xsec_source=pc_search"
+
+    service._store_note_open_links(first["job_id"], {"note-1": first_target})
+    service._store_note_open_links(second["job_id"], {"note-1": second_target})
+
+    assert service.note_open_url(first["job_id"], "note-1") == first_target
+    assert service.note_open_url(second["job_id"], "note-1") == second_target
+
+
+def test_note_open_endpoint_returns_gone_after_restart(monkeypatch):
+    service = XhsConnectorService(job_store=JobStore(), executor=ImmediateExecutor())
+    monkeypatch.setattr(xhs_connector, "service", service)
+
+    from main import app
+
+    response = TestClient(app).get(
+        "/api/v1/xhs/collections/xhs_collection_missing/notes/note-1/open",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 410
 
 
 def test_auth_status_rejects_guest_or_expired_sessions_and_caches_live_result():
