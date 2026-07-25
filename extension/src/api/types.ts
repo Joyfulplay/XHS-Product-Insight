@@ -365,6 +365,7 @@ export interface AnalysisEvidenceViewModel {
   relevance_score: number | null;
   risk_score: number | null;
   source_url: string | null;
+  link_expires_at: string | null;
 }
 
 export interface ProductAttributeViewModel {

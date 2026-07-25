@@ -9,6 +9,7 @@ const files = [
   "src/api/types.ts",
   "src/config.ts",
   "src/analysis_view_model.ts",
+  "src/source_link.ts",
   "src/sidepanel.ts",
   "src/collection_flow.ts",
 ];
@@ -34,9 +35,16 @@ for (const requiredSnippet of [
   'authStatus: (refresh = false)',
   'startLogin("auto", true',
   'getAuthStatus({ refresh: true }',
+<<<<<<< HEAD
   'max_notes: config?.max_notes ?? 10',
   'max_comments_per_note: config?.max_comments_per_note ?? 20',
   'this.startCollection(request.page_product, request.keyword, request.config, signal)',
+=======
+  "link_expires_at",
+  "data-source-expires-at",
+  "sourceLinkProblem",
+  "原文链接已过期，请重新采集。",
+>>>>>>> db3cb2a (fix: add temporary XHS note redirects)
 ]) {
   if (!Object.values(content).some((source) => source.includes(requiredSnippet))) {
     throw new Error(`Missing real-login contract: ${requiredSnippet}`);
@@ -114,6 +122,10 @@ const analysisViewModelJs = ts.transpileModule(content["src/analysis_view_model.
   compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022, verbatimModuleSyntax: true },
 }).outputText;
 const { normalizeAnalysisResult } = await import(`data:text/javascript,${encodeURIComponent(analysisViewModelJs)}`);
+const sourceLinkJs = ts.transpileModule(content["src/source_link.ts"], {
+  compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022, verbatimModuleSyntax: true },
+}).outputText;
+const { sourceLinkProblem } = await import(`data:text/javascript,${encodeURIComponent(sourceLinkJs)}`);
 const schema11Result = {
   schema_version: "1.1",
   collection: {
@@ -137,7 +149,7 @@ const schema11Result = {
     sentiment_distribution: { positive: 0.6, neutral: 0.3, negative: 0.1 },
     risk_ratio: 0.2,
   },
-  representative_notes: [{ note_id: "note-1", title: "真实体验", url: "https://www.xiaohongshu.com/explore/note-1", score: 0.9, summary: "代表笔记" }],
+  representative_notes: [{ note_id: "note-1", title: "真实体验", url: "https://www.xiaohongshu.com/explore/note-1", source_url: "http://127.0.0.1:8000/api/v1/xhs/collections/job-1/notes/note-1/open", link_expires_at: "2999-01-01T00:00:00+00:00", score: 0.9, summary: "代表笔记" }],
   notes: Array.from({ length: 10 }, (_, index) => ({
     id: `note-${index}`,
     comments: Array.from({ length: index === 0 ? 8 : 5 }, (__, commentIndex) => ({ id: `comment-${index}-${commentIndex}` })),
@@ -162,9 +174,10 @@ if (normalizedSchema11.sample.risk_negative_ratio !== 0.2) {
 if (normalizedSchema11.keywords[0] !== "降噪") {
   throw new Error("schema 1.1 statistics.keywords mapping failed");
 }
-if (normalizedSchema11.evidence[0]?.source_url !== "https://www.xiaohongshu.com/explore/note-1") {
+if (normalizedSchema11.evidence[0]?.source_url !== "http://127.0.0.1:8000/api/v1/xhs/collections/job-1/notes/note-1/open") {
   throw new Error("schema 1.1 representative_notes mapping failed");
 }
+<<<<<<< HEAD
 const linkOnlyResult = { representative_notes: [{ note_id: "generated-note", title: "无 URL 笔记" }, { title: "link 笔记", link: "https://www.xiaohongshu.com/explore/link-note" }] };
 const normalizedLinkOnly = normalizeAnalysisResult(linkOnlyResult);
 if (normalizedLinkOnly.evidence[0]?.source_url !== "https://www.xiaohongshu.com/explore/generated-note") {
@@ -172,6 +185,23 @@ if (normalizedLinkOnly.evidence[0]?.source_url !== "https://www.xiaohongshu.com/
 }
 if (normalizedLinkOnly.evidence[1]?.source_url !== "https://www.xiaohongshu.com/explore/link-note") {
   throw new Error("link source URL mapping failed");
+=======
+if (normalizedSchema11.evidence[0]?.link_expires_at !== "2999-01-01T00:00:00+00:00") {
+  throw new Error("schema 1.1 temporary source expiry mapping failed");
+}
+const temporarySourceUrl = normalizedSchema11.evidence[0]?.source_url ?? "";
+if (sourceLinkProblem(temporarySourceUrl, "2999-01-01T00:00:00+00:00") !== null) {
+  throw new Error("valid temporary source URL should open");
+}
+if (sourceLinkProblem(temporarySourceUrl, "2000-01-01T00:00:00+00:00") !== "原文链接已过期，请重新采集。") {
+  throw new Error("expired temporary source URL should be blocked");
+}
+if (sourceLinkProblem(temporarySourceUrl, null) !== "本次采集未获得可用原文链接，请重新采集。") {
+  throw new Error("temporary source URL without expiry should be blocked");
+}
+if (sourceLinkProblem("https://www.xiaohongshu.com/explore/note-1", null) !== null) {
+  throw new Error("ordinary external source URL should retain its current behavior");
+>>>>>>> db3cb2a (fix: add temporary XHS note redirects)
 }
 
 console.log("verify-frontend-contract: ok");
