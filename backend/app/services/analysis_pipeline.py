@@ -13,6 +13,8 @@ from collections import Counter
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterable
 
+import pyrootutils
+
 from app.preprocess.cleaner import ContentCleaner
 from app.schemas.analysis_result import (
     AnalysisCollectionSummary,
@@ -25,7 +27,7 @@ from app.schemas.analysis_result import (
 )
 from app.schemas.crawler import CrawlNote
 from app.LLM.service import XiaohongshuInsightService
-
+PROJECT_ROOT = pyrootutils.setup_root(__file__, indicator=".git", pythonpath=True)
 
 POSITIVE_WORDS = {
     "不错",
@@ -76,21 +78,26 @@ class AnalysisPipelineService:
         result, _ = self.run_with_llm_response(collection_dataset)
         return result
     def run_with_llm_response(
-    self, collection_dataset: dict[str, Any]
+        self, collection_dataset: dict[str, Any]
     ) -> tuple[AnalysisResult, dict[str, Any] | None]:
         task_id = collection_dataset.get("task_id", datetime.now().strftime("%Y%m%d_%H%M%S"))
         
-        # 1. 保存原始元数据到 data/raw
-        os.makedirs("data/raw", exist_ok=True)
-        with open(f"data/raw/{task_id}.json", "w", encoding="utf-8") as f:
+        # 统一设置根目录下的 data 绝对路径
+        raw_dir = PROJECT_ROOT / "data" / "raw"
+        processed_dir = PROJECT_ROOT / "data" / "processed"
+        result_dir = PROJECT_ROOT / "data" / "result"
+
+        # 1. 保存原始元数据到 项目根目录/data/raw
+        raw_dir.mkdir(parents=True, exist_ok=True)
+        with open(raw_dir / f"{task_id}.json", "w", encoding="utf-8") as f:
             json.dump(collection_dataset, f, ensure_ascii=False, indent=2)
 
         notes = [note for note in collection_dataset.get("notes", []) if isinstance(note, dict)]
         cleaned_notes = self._clean_notes(notes)
         
-        # 2. 保存预处理后的数据到 data/processed
-        os.makedirs("data/processed", exist_ok=True)
-        with open(f"data/processed/{task_id}.json", "w", encoding="utf-8") as f:
+        # 2. 保存预处理后的数据到 项目根目录/data/processed
+        processed_dir.mkdir(parents=True, exist_ok=True)
+        with open(processed_dir / f"{task_id}.json", "w", encoding="utf-8") as f:
             json.dump(cleaned_notes, f, ensure_ascii=False, indent=2)
 
         all_texts = self._all_texts(cleaned_notes)
@@ -107,9 +114,9 @@ class AnalysisPipelineService:
             completed_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         )
 
-        # 3. 保存最终分析结果到 data/result
-        os.makedirs("data/result", exist_ok=True)
-        with open(f"data/result/{task_id}.json", "w", encoding="utf-8") as f:
+        # 3. 保存最终分析结果到 项目根目录/data/result
+        result_dir.mkdir(parents=True, exist_ok=True)
+        with open(result_dir / f"{task_id}.json", "w", encoding="utf-8") as f:
             json.dump(final_result.model_dump(), f, ensure_ascii=False, indent=2)
 
         return final_result, llm_response
