@@ -148,8 +148,10 @@ activemq-data/
 # SageMath parsed files
 *.sage.py
 
-# Environments
+# Environments and developer-only secrets
 .env
+.env.*
+!.env.example
 .envrc
 .venv
 env/
@@ -218,6 +220,9 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
+# Runtime collection data (keep directory placeholders, ignore generated payloads)
+/data/**/*.json
+
 # vscode
 .vscode/
 
@@ -226,3 +231,6 @@ __marimo__/
 
 # Local raw crawler outputs (the directory itself is retained with .gitkeep)
 data/raw/*.json
+
+# 忽略所有 data 目录下的 json 文件
+**/data/**/*.json

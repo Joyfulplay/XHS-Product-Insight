@@ -10,8 +10,8 @@ import json
 from pathlib import Path
 from typing import Any, Iterable
 
-from client import LLMClient
-from prompt.prompt import (
+from app.LLM.client import LLMClient
+from app.LLM.prompt.prompt import (
     IMAGE_ANALYSIS_SYSTEM_PROMPT,
     POST_ANALYSIS_SYSTEM_PROMPT,
     SUMMARY_SYSTEM_PROMPT,

@@ -265,7 +265,9 @@ class XhsConnectorService:
         self.jobs = job_store or JobStore()
         self.executor = executor or ThreadPoolExecutor(max_workers=2, thread_name_prefix="xhs-job")
         self.analysis_pipeline = AnalysisPipelineService()
-        self.persistence = PersistenceService(PROJECT_ROOT / "data/processed/collection_results")
+        self.raw_persistence = PersistenceService(PROJECT_ROOT / "data/raw")
+        self.persistence = PersistenceService(PROJECT_ROOT / "data/processed")
+        self.result_persistence = PersistenceService(PROJECT_ROOT / "data/result")
         self._futures: dict[str, Future[Any]] = {}
         self._auth_cache: dict[str, Any] | None = None
         self._auth_cache_at = 0.0
@@ -331,26 +333,39 @@ class XhsConnectorService:
         self.jobs.update(job_id, status="running", stage="collecting", progress=0.1)
         try:
             self.auth_status(refresh=True, require_authenticated=True)
-<<<<<<< HEAD
             scraper = self._build_scraper(
                 max_notes=request.max_notes,
                 max_comments=request.max_comments_per_note,
             )
             dataset = scraper.collect(request.source, query_override=request.query_override)
-=======
-            dataset = self._build_scraper().collect(source, query_override=query_override)
+            raw_storage_path = self.raw_persistence.save(job_id, dataset)
             note_open_links = self._extract_note_open_links(dataset)
->>>>>>> db3cb2a (fix: add temporary XHS note redirects)
-            result = normalize_collection_dataset(dataset)
+            processed_dataset = normalize_collection_dataset(dataset)
+            processed_storage_path = self.persistence.save(job_id, processed_dataset)
             self.jobs.update(job_id, stage="cleaning", progress=0.55)
-            analysis_result = self.analysis_pipeline.run(result).model_dump(mode="json")
+            analysis, llm_response = self.analysis_pipeline.run_with_llm_response(processed_dataset)
+            analysis_result = analysis.model_dump(mode="json")
+            result_storage_path = self.result_persistence.save(
+                job_id,
+                {
+                    "job_id": job_id,
+                    "llm_response": llm_response,
+                    "analysis": analysis_result,
+                },
+            )
             expires_at = self._store_note_open_links(job_id, note_open_links)
             self._attach_note_open_urls(analysis_result, job_id, note_open_links, expires_at)
             self.jobs.update(job_id, stage="statistical_analysis", progress=0.85)
-            result = {**result, **analysis_result}
+            result = {**processed_dataset, **analysis_result}
             self.jobs.update(job_id, stage="persisting", progress=0.95)
-            storage_path = self.persistence.save(job_id, result)
-            result = {**result, "storage": {"path": storage_path}}
+            result = {
+                **result,
+                "storage": {
+                    "raw_path": raw_storage_path,
+                    "processed_path": processed_storage_path,
+                    "result_path": result_storage_path,
+                },
+            }
         except Exception as exc:
             self._discard_note_open_links(job_id)
             error = translate_client_exception(exc)

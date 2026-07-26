@@ -63,7 +63,6 @@ class FakeConnectorService(XhsConnectorService):
         return self.scraper
 
 
-<<<<<<< HEAD
 def test_collection_request_defaults_and_custom_limits_reach_the_scraper():
     dataset = {
         "schema_version": "1.1",
@@ -106,11 +105,11 @@ def test_collection_endpoint_rejects_out_of_range_limits(payload):
     response = TestClient(app).post("/api/v1/xhs/collections", json=payload)
 
     assert response.status_code == 422
-=======
+
+
 class FailingPersistence:
     def save(self, key, payload):
         raise OSError("persistence failed")
->>>>>>> db3cb2a (fix: add temporary XHS note redirects)
 
 
 def test_collection_request_accepts_a_product_keyword():

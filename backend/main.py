@@ -1,5 +1,34 @@
+import os
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+
+def load_local_env(path: Path) -> None:
+    """Load ``KEY=VALUE`` entries from *path* without overriding shell variables."""
+    if not path.is_file():
+        return
+
+    for line in path.read_text(encoding="utf-8").splitlines():
+        entry = line.strip()
+        if not entry or entry.startswith("#"):
+            continue
+        if entry.startswith("export "):
+            entry = entry[7:].lstrip()
+        if "=" not in entry:
+            continue
+        key, value = entry.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            continue
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        os.environ.setdefault(key, value)
+
+
+load_local_env(Path(__file__).resolve().parents[1] / ".env")
 
 from app.api.xhs_connector import router as xhs_connector_router
 
@@ -24,3 +53,14 @@ def read_root() -> dict:
         "status": "initialized",
         "message": "Backend API entry point is ready.",
     }
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(
+        app,
+        host=os.getenv("UVICORN_HOST", "127.0.0.1"),
+        port=int(os.getenv("UVICORN_PORT", "8000")),
+        reload=os.getenv("UVICORN_RELOAD", "0") == "1",
+    )
