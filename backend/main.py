@@ -58,9 +58,15 @@ def read_root() -> dict:
 if __name__ == "__main__":
     import uvicorn
 
+    # The reload subprocess imports ``main:app``.  Anchor its import path to
+    # this file so `python backend/main.py` also works from the project root.
+    os.chdir(Path(__file__).resolve().parent)
     uvicorn.run(
-        app,
+        "main:app",
         host=os.getenv("UVICORN_HOST", "127.0.0.1"),
         port=int(os.getenv("UVICORN_PORT", "8000")),
-        reload=os.getenv("UVICORN_RELOAD", "0") == "1",
+        # Keep direct `python backend/main.py` starts consistent with the
+        # development launcher: source changes restart the local API.
+        reload=True,
+        reload_dirs=[str(Path(__file__).resolve().parent)],
     )
