@@ -656,12 +656,8 @@ function renderSources(analysis: ProductAnalysisData | unknown): string {
   const xhsSources = normalizeAnalysisResult(analysis).evidence;
   return `<section class="card">
     <div class="section-heading"><div><span class="eyebrow">${USE_MOCK ? "Mock 小红书内容" : "小红书内容"}</span><h2>小红书代表性内容</h2></div></div>
-<<<<<<< HEAD
     <p class="field-hint">原文将在新标签页打开；若小红书网页要求登录，请在当前浏览器完成登录。该登录与采集服务登录相互独立。</p>
-    ${xhsSources.length ? `<div class="source-list">${xhsSources.map((source) => `<button class="source-row external-link" data-source-url="${escapeHtml(source.source_url ?? "")}" ${source.source_url ? "" : "disabled"}><span class="source-platform">小红书</span><strong>${escapeHtml(source.title)}</strong><small>${dateTime(source.publish_time)} · 相关度 ${percent(source.relevance_score)}${source.risk_score === null ? "" : ` · 风险分数 ${source.risk_score.toFixed(2)}`}${source.quote ? ` · ${escapeHtml(source.quote)}` : ""}</small><i>↗</i></button>`).join("")}</div>` : renderEmpty("暂无小红书代表性内容")}
-=======
     ${xhsSources.length ? `<div class="source-list">${xhsSources.map((source) => `<button class="source-row external-link" data-source-url="${escapeHtml(source.source_url ?? "")}" data-source-expires-at="${escapeHtml(source.link_expires_at ?? "")}" ${source.source_url ? "" : "disabled"}><span class="source-platform">小红书</span><strong>${escapeHtml(source.title)}</strong><small>${dateTime(source.publish_time)} · 相关度 ${percent(source.relevance_score)}${source.risk_score === null ? "" : ` · 风险分数 ${source.risk_score.toFixed(2)}`}${source.quote ? ` · ${escapeHtml(source.quote)}` : ""}</small><i>↗</i></button>`).join("")}</div>` : renderEmpty("暂无小红书代表性内容")}
->>>>>>> db3cb2a (fix: add temporary XHS note redirects)
   </section>`;
 }
 

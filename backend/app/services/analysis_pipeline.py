@@ -23,6 +23,8 @@ from app.schemas.analysis_result import (
     SentimentDistribution,
     StatisticsSummary,
 )
+from app.schemas.crawler import CrawlNote
+from app.LLM.service import XiaohongshuInsightService
 
 
 POSITIVE_WORDS = {
@@ -57,100 +59,99 @@ STOPWORDS = {"一个", "这个", "真的", "感觉", "还是", "就是", "可以
 ATTRIBUTE_HINTS = ["降噪", "音质", "续航", "舒适", "重量", "价格", "做工", "屏幕", "拍照", "性能", "散热"]
 SCENARIO_HINTS = ["通勤", "办公室", "学习", "旅行", "运动", "宿舍", "上课", "出差", "游戏"]
 USER_HINTS = ["学生", "上班族", "宝妈", "新手", "敏感肌", "预算", "女生", "男生"]
-LLM_INSIGHTS_SYSTEM_PROMPT = """????????????????????????????????????????????????????????
-
-???
-1. ???????????????????????????
-2. ????????????? null??????? []?
-3. ?????????????????????????????? pros ? cons?
-4. ???? JSON??? Markdown????????
-
-?????
-{
-  "overall_summary": "string|null",
-  "product_attributes": ["string"],
-  "usage_scenarios": ["string"],
-  "user_types": ["string"],
-  "unsuitable_users": ["string"],
-  "pros": ["string"],
-  "cons": ["string"],
-  "purchase_advice": "string|null"
-}
-"""
 
 
 class AnalysisPipelineService:
     """Build a stable frontend response from one completed collection dataset."""
 
-    def __init__(self, cleaner: ContentCleaner | None = None, llm_client_factory: Callable[[], Any] | None = None) -> None:
+    def __init__(
+        self,
+        cleaner: ContentCleaner | None = None,
+        insight_service_factory: Callable[[], XiaohongshuInsightService] | None = None,
+    ) -> None:
         self.cleaner = cleaner or ContentCleaner()
-        self.llm_client_factory = llm_client_factory
+        self.insight_service_factory = insight_service_factory
 
     def run(self, collection_dataset: dict[str, Any]) -> AnalysisResult:
+        result, _ = self.run_with_llm_response(collection_dataset)
+        return result
+    def run_with_llm_response(
+    self, collection_dataset: dict[str, Any]
+    ) -> tuple[AnalysisResult, dict[str, Any] | None]:
+        task_id = collection_dataset.get("task_id", datetime.now().strftime("%Y%m%d_%H%M%S"))
+        
+        # 1. 保存原始元数据到 data/raw
+        os.makedirs("data/raw", exist_ok=True)
+        with open(f"data/raw/{task_id}.json", "w", encoding="utf-8") as f:
+            json.dump(collection_dataset, f, ensure_ascii=False, indent=2)
+
         notes = [note for note in collection_dataset.get("notes", []) if isinstance(note, dict)]
         cleaned_notes = self._clean_notes(notes)
+        
+        # 2. 保存预处理后的数据到 data/processed
+        os.makedirs("data/processed", exist_ok=True)
+        with open(f"data/processed/{task_id}.json", "w", encoding="utf-8") as f:
+            json.dump(cleaned_notes, f, ensure_ascii=False, indent=2)
+
         all_texts = self._all_texts(cleaned_notes)
         comment_texts = [comment["text"] for note in cleaned_notes for comment in note["comments"]]
 
         fallback_insights = self._build_rule_insights(all_texts, comment_texts)
+        llm_insights, llm_response = self._build_llm_insights(collection_dataset, cleaned_notes)
 
-        return AnalysisResult(
+        final_result = AnalysisResult(
             collection=self._collection_summary(collection_dataset, cleaned_notes),
-            llm_insights=self._build_llm_insights(collection_dataset, cleaned_notes) or fallback_insights,
+            llm_insights=llm_insights or fallback_insights,
             statistics=self._build_statistics(all_texts),
             representative_notes=self._representative_notes(cleaned_notes),
             completed_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         )
 
-    def _clean_notes(self, notes: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        cleaned: list[dict[str, Any]] = []
-        seen_content: set[str] = set()
-        for note in notes:
-            title = self.cleaner.clean_text(str(note.get("title") or ""))
-            text = self.cleaner.clean_text(str(note.get("text") or ""))
-            dedupe_key = f"{title}\n{text}".strip()
-            if not dedupe_key or dedupe_key in seen_content:
-                continue
-            seen_content.add(dedupe_key)
+        # 3. 保存最终分析结果到 data/result
+        os.makedirs("data/result", exist_ok=True)
+        with open(f"data/result/{task_id}.json", "w", encoding="utf-8") as f:
+            json.dump(final_result.model_dump(), f, ensure_ascii=False, indent=2)
 
-            comments = self._clean_comments(note.get("comments", []))
-            engagement = note.get("engagement") if isinstance(note.get("engagement"), dict) else {}
-            cleaned.append(
-                {
-                    "note_id": str(note.get("note_id") or ""),
-                    "url": str(note.get("url") or ""),
-                    "title": title,
-                    "text": text,
-                    "comments": comments,
-                    "likes": self._safe_int(engagement.get("likes")),
-                    "comments_count": len(comments),
-                    "tags": note.get("tags") if isinstance(note.get("tags"), list) else [],
-                    "publish_time": note.get("publish_time"),
-                }
-            )
+        return final_result, llm_response
+
+    def _clean_notes(self, raw_notes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        cleaned: list[dict[str, Any]] = []
+        seen_texts: set[str] = set()
+
+        for raw_dict in raw_notes:
+            # 1. 适配并将裸数据转化为 CrawlNote 对象以配合 ContentCleaner 处理
+            try:
+                raw_note = CrawlNote.model_validate(raw_dict)
+            except Exception:
+                # 若无法校验为 Standard CrawlNote，自动构造防御性 fallback 对象
+                continue
+
+            # 2. 调用 ContentCleaner 的核心流程 process_note，完成去重、图片压缩与评论提取
+            cleaned_note_model = self.cleaner.process_note(raw_note, seen_texts)
+            if not cleaned_note_model:
+                continue
+
+            # 3. 转换为 Pipeline downstream 统一接受的字典格式
+            note_dict = cleaned_note_model.model_dump()
+            # 保证字典层兼容 Pipeline 内部字段表达
+            cleaned.append({
+                "note_id": str(note_dict.get("note_id", "")),
+                "url": str(note_dict.get("url", "")),
+                "title": note_dict.get("title", ""),
+                "text": note_dict.get("text", ""),
+                "images": note_dict.get("images", []),
+                "comments": note_dict.get("comments", []),
+                "likes": note_dict.get("likes", 0),
+                "comments_count": len(note_dict.get("comments", [])),
+                "tags": note_dict.get("tags", []),
+                "publish_time": note_dict.get("publish_time"),
+            })
+
         return cleaned
 
-    def _clean_comments(self, raw_comments: Any) -> list[dict[str, Any]]:
-        if not isinstance(raw_comments, list):
-            return []
-        comments: list[dict[str, Any]] = []
-        for comment in raw_comments:
-            if not isinstance(comment, dict):
-                continue
-            text = self.cleaner.clean_text(str(comment.get("text") or ""))
-            if len(text) < 4:
-                continue
-            comments.append(
-                {
-                    "comment_id": str(comment.get("comment_id") or ""),
-                    "text": text,
-                    "likes": self._safe_int(comment.get("likes")),
-                }
-            )
-        comments.sort(key=lambda item: item["likes"], reverse=True)
-        return comments[:10]
-
-    def _collection_summary(self, dataset: dict[str, Any], cleaned_notes: list[dict[str, Any]]) -> AnalysisCollectionSummary:
+    def _collection_summary(
+        self, dataset: dict[str, Any], cleaned_notes: list[dict[str, Any]]
+    ) -> AnalysisCollectionSummary:
         raw_collection = dataset.get("collection", {})
         if not isinstance(raw_collection, dict):
             raw_collection = {}
@@ -179,58 +180,36 @@ class AnalysisPipelineService:
             purchase_advice=self._purchase_advice(positive_examples, negative_examples),
         )
 
-    def _build_llm_insights(self, dataset: dict[str, Any], cleaned_notes: list[dict[str, Any]]) -> LlmInsights | None:
+    def _build_llm_insights(
+        self, dataset: dict[str, Any], cleaned_notes: list[dict[str, Any]]
+    ) -> tuple[LlmInsights | None, dict[str, Any] | None]:
         if not cleaned_notes:
-            return None
-        try:
-            client = self._llm_client()
-        except Exception:
-            return None
-        payload = self._llm_payload(dataset, cleaned_notes)
-        try:
-            raw_result = client.analyze_json(
-                system_prompt=LLM_INSIGHTS_SYSTEM_PROMPT,
-                text=json.dumps(payload, ensure_ascii=False),
-                temperature=0.1,
-            )
-            return LlmInsights.model_validate(raw_result)
-        except Exception:
-            return None
+            return None, None
 
-    def _llm_client(self) -> Any:
-        if self.llm_client_factory is not None:
-            return self.llm_client_factory()
-        if not os.getenv("OPENAI_API_KEY"):
-            raise RuntimeError("OPENAI_API_KEY is not configured")
+        try:
+            insight_service = self._get_insight_service()
+        except Exception:
+            return None, None
+
+        raw_input = dataset.get("input") if isinstance(dataset.get("input"), dict) else {}
+        product_name = str(raw_input.get("query") or raw_input.get("product_name") or "目标产品") # type: ignore
+
+        try:
+            batch_result = insight_service.analyze_batch(product_name, cleaned_notes[:8])
+            summary_json = batch_result.get("summary", {})
+
+            insights = LlmInsights.model_validate(summary_json)
+            return insights, batch_result
+        except Exception:
+            return None, None
+
+    def _get_insight_service(self) -> XiaohongshuInsightService:
+        if self.insight_service_factory is not None:
+            return self.insight_service_factory()
+
         from app.LLM.client import LLMClient
 
-        return LLMClient()
-
-    def _llm_payload(self, dataset: dict[str, Any], cleaned_notes: list[dict[str, Any]]) -> dict[str, Any]:
-        raw_input = dataset.get("input") if isinstance(dataset.get("input"), dict) else {}
-        return {
-            "product_query": raw_input.get("query"),
-            "collection": dataset.get("collection", {}),
-            "notes": [self._llm_note_payload(note) for note in cleaned_notes[:8]],
-        }
-
-    def _llm_note_payload(self, note: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "note_id": note["note_id"],
-            "title": note["title"],
-            "text": self._trim(note["text"], 600),
-            "tags": note.get("tags", []),
-            "publish_time": note.get("publish_time"),
-            "likes": note["likes"],
-            "comments": [
-                {
-                    "comment_id": comment["comment_id"],
-                    "text": self._trim(comment["text"], 180),
-                    "likes": comment["likes"],
-                }
-                for comment in note["comments"][:8]
-            ],
-        }
+        return XiaohongshuInsightService(llm=LLMClient())
 
     def _build_statistics(self, texts: list[str]) -> StatisticsSummary:
         return StatisticsSummary(
@@ -304,7 +283,10 @@ class AnalysisPipelineService:
         texts: list[str] = []
         for note in notes:
             texts.extend(part for part in [note["title"], note["text"]] if part)
-            texts.extend(comment["text"] for comment in note["comments"])
+            texts.extend(
+                comment.get("text", "") if isinstance(comment, dict) else str(getattr(comment, "text", ""))
+                for comment in note["comments"]
+            )
         return texts
 
     def _sentences_with_words(self, texts: list[str], words: set[str], limit: int) -> list[str]:

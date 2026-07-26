@@ -14,7 +14,7 @@
 """
 
 from __future__ import annotations
-
+import pyrootutils
 import argparse
 import hashlib
 import html
@@ -36,7 +36,7 @@ from uuid import uuid4
 
 XHS_HOME = "https://www.xiaohongshu.com"
 SCHEMA_VERSION = "1.1"
-PROJECT_ROOT = Path(__file__).resolve().parents[4]
+PROJECT_ROOT = pyrootutils.setup_root(__file__, indicator=".git", pythonpath=True)
 DEFAULT_RAW_DATA_DIR = PROJECT_ROOT / "data" / "raw"
 SEARCH_PAGE_SIZE = 20
 COMMENT_PAGE_LIMIT = 3

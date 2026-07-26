@@ -95,12 +95,8 @@ function evidenceFromSource(source: ProductAnalysisData["top_sources"][number] |
     publish_time: firstString(source, ["publish_time", "published_at", "created_at"], "") || null,
     relevance_score: firstNumber(source, ["relevance_score", "score"], null),
     risk_score: firstNumber(source, ["risk_score"], null),
-<<<<<<< HEAD
     source_url: firstString(source, ["source_url", "url", "note_url", "link"], "") || (noteId ? `https://www.xiaohongshu.com/explore/${encodeURIComponent(noteId)}` : null),
-=======
-    source_url: firstString(source, ["source_url", "url", "note_url"], "") || null,
     link_expires_at: firstString(source, ["link_expires_at"], "") || null,
->>>>>>> db3cb2a (fix: add temporary XHS note redirects)
   };
 }
 
