@@ -1,19 +1,16 @@
-"""Collection-to-frontend analysis pipeline.
+"""Pure collection-to-frontend analysis pipeline.
 
-The extension currently polls collection jobs, so backend integration returns
-the final insight contract from the existing collection result endpoint.
+Persistence and request orchestration belong to the connector service. This
+module only transforms one completed collection dataset into analysis output.
 """
 
 from __future__ import annotations
 
-import json
-import os
+import logging
 import re
 from collections import Counter
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterable
-
-import pyrootutils
 
 from app.preprocess.cleaner import ContentCleaner
 from app.schemas.analysis_result import (
@@ -25,9 +22,13 @@ from app.schemas.analysis_result import (
     SentimentDistribution,
     StatisticsSummary,
 )
+from app.schemas.llmoutput import XiaohongshuSummaryOutput
 from app.schemas.crawler import CrawlNote
 from app.LLM.service import XiaohongshuInsightService
-PROJECT_ROOT = pyrootutils.setup_root(__file__, indicator=".git", pythonpath=True)
+
+# Reuse Uvicorn's configured error logger so this operational event is visible
+# in the backend terminal without requiring an additional logging setup.
+logger = logging.getLogger("uvicorn.error")
 
 POSITIVE_WORDS = {
     "不错",
@@ -80,25 +81,8 @@ class AnalysisPipelineService:
     def run_with_llm_response(
         self, collection_dataset: dict[str, Any]
     ) -> tuple[AnalysisResult, dict[str, Any] | None]:
-        task_id = collection_dataset.get("task_id", datetime.now().strftime("%Y%m%d_%H%M%S"))
-        
-        # 统一设置根目录下的 data 绝对路径
-        raw_dir = PROJECT_ROOT / "data" / "raw"
-        processed_dir = PROJECT_ROOT / "data" / "processed"
-        result_dir = PROJECT_ROOT / "data" / "result"
-
-        # 1. 保存原始元数据到 项目根目录/data/raw
-        raw_dir.mkdir(parents=True, exist_ok=True)
-        with open(raw_dir / f"{task_id}.json", "w", encoding="utf-8") as f:
-            json.dump(collection_dataset, f, ensure_ascii=False, indent=2)
-
         notes = [note for note in collection_dataset.get("notes", []) if isinstance(note, dict)]
         cleaned_notes = self._clean_notes(notes)
-        
-        # 2. 保存预处理后的数据到 项目根目录/data/processed
-        processed_dir.mkdir(parents=True, exist_ok=True)
-        with open(processed_dir / f"{task_id}.json", "w", encoding="utf-8") as f:
-            json.dump(cleaned_notes, f, ensure_ascii=False, indent=2)
 
         all_texts = self._all_texts(cleaned_notes)
         comment_texts = [comment["text"] for note in cleaned_notes for comment in note["comments"]]
@@ -113,11 +97,6 @@ class AnalysisPipelineService:
             representative_notes=self._representative_notes(cleaned_notes),
             completed_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         )
-
-        # 3. 保存最终分析结果到 项目根目录/data/result
-        result_dir.mkdir(parents=True, exist_ok=True)
-        with open(result_dir / f"{task_id}.json", "w", encoding="utf-8") as f:
-            json.dump(final_result.model_dump(), f, ensure_ascii=False, indent=2)
 
         return final_result, llm_response
 
@@ -202,13 +181,36 @@ class AnalysisPipelineService:
         product_name = str(raw_input.get("query") or raw_input.get("product_name") or "目标产品") # type: ignore
 
         try:
+            logger.info(
+                "[LLM_ANALYSIS_STARTED] 已开始大模型分析：product=%s, note_count=%d",
+                product_name,
+                min(len(cleaned_notes), 8),
+            )
             batch_result = insight_service.analyze_batch(product_name, cleaned_notes[:8])
             summary_json = batch_result.get("summary", {})
 
-            insights = LlmInsights.model_validate(summary_json)
-            return insights, batch_result
+            summary = XiaohongshuSummaryOutput.model_validate(summary_json)
+            validated_batch_result = {
+                **batch_result,
+                "summary": summary.model_dump(mode="json"),
+            }
+            return self._frontend_insights_from_summary(summary), validated_batch_result
         except Exception:
+            logger.exception(
+                "[LLM_ANALYSIS_FAILED] 大模型分析或汇总结果校验失败：product=%s",
+                product_name,
+            )
             return None, None
+
+    @staticmethod
+    def _frontend_insights_from_summary(summary: XiaohongshuSummaryOutput) -> LlmInsights:
+        """Adapt the validated LLM summary to the current frontend contract."""
+
+        return LlmInsights(
+            overall_summary=summary.purchase_reference.trust_aware_one_liner,
+            product_attributes=[aspect.name for aspect in summary.aspects],
+            purchase_advice=summary.purchase_reference.trust_aware_one_liner,
+        )
 
     def _get_insight_service(self) -> XiaohongshuInsightService:
         if self.insight_service_factory is not None:

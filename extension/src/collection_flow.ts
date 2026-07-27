@@ -115,10 +115,10 @@ function crawlStageLabel(job: CrawlJobData): string {
     queued: "已排队",
     running: "正在采集笔记和评论",
     crawling: "正在采集笔记和评论",
-    cleaning: "正在清洗数据",
-    llm_extracting: "正在进行 LLM 抽取",
-    analyzing: "正在统计分析",
-    formatting: "正在格式化数据",
+    cleaning: "正在处理旧版采集任务",
+    llm_extracting: "正在处理旧版采集任务",
+    analyzing: "正在处理旧版采集任务",
+    formatting: "正在处理旧版采集任务",
     succeeded: "采集完成",
     completed: "采集完成",
     failed: "采集失败",
@@ -167,7 +167,7 @@ export function renderCollectionFlow(
   useMock: boolean,
 ): string {
   const validation = validateCrawlReady(state);
-  const runningStatuses = ["queued", "running", "crawling", "cleaning", "llm_extracting", "analyzing", "formatting"];
+  const runningStatuses = ["queued", "running", "crawling"];
   const canStart = !validation && !runningStatuses.includes(state.crawlJob.status);
   const isRunning = runningStatuses.includes(state.crawlJob.status);
   const startLabel = state.starting ? (["failed", "timeout"].includes(state.crawlJob.status) ? "正在重试..." : "正在创建...") : "开始采集";
@@ -224,15 +224,16 @@ export function renderCollectionFlow(
     ${renderCrawlStatus(state, isRunning)}
 
     ${state.formattedPreview ? `<div class="formatted-preview">
-      <div class="section-heading"><div><span class="eyebrow">后端分析结果</span><h2>${useMock ? "Mock 数据预览" : "已完成采集与分析"}</h2></div></div>
+      <div class="section-heading"><div><span class="eyebrow">采集结果</span><h2>${useMock ? "Mock 数据预览" : "采集完成，等待分析"}</h2></div></div>
       <dl>
+        <div><dt>采集任务 ID</dt><dd>${escapeHtml(state.crawlJob.job_id ?? "暂无")}</dd></div>
         <div><dt>商品信息</dt><dd>${escapeHtml(productName)}</dd></div>
         <div><dt>搜索关键词</dt><dd>${escapeHtml(state.formattedPreview.keyword)}</dd></div>
         <div><dt>用户偏好</dt><dd>${escapeHtml(preferencePreview(preferences) || "未设置")}</dd></div>
         <div><dt>笔记数量</dt><dd>${state.formattedPreview.note_count}</dd></div>
         <div><dt>评论数量</dt><dd>${state.formattedPreview.comment_count}</dd></div>
       </dl>
-      <button class="primary-button inline" id="submit-analysis-button" ${state.submitting ? "disabled" : ""}>${state.submitting ? (useMock ? "正在模拟提交" : "正在确认结果") : (useMock ? "模拟提交给后端分析" : "确认查看分析结果")}</button>
+      <button class="primary-button inline" id="submit-analysis-button" ${state.submitting ? "disabled" : ""}>${state.submitting ? "正在分析..." : (useMock ? "模拟分析采集结果" : "分析本次采集结果")}</button>
       ${state.submitMessage ? `<p class="field-hint strong">${escapeHtml(state.submitMessage)}</p>` : ""}
     </div>` : ""}
   </section>`;

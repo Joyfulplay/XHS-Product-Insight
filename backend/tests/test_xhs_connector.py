@@ -8,9 +8,11 @@ from app.api.xhs_connector import (
     CollectionRequest,
     JobStore,
     XhsConnectorService,
+    frontend_llm_summary_fields,
     normalize_collection_dataset,
 )
 from app.services.persistence_service import PersistenceService
+from app.services.analysis_pipeline import AnalysisPipelineService
 from app.data.crawlers.xhs_client import AuthRequiredError
 
 
@@ -61,6 +63,43 @@ class FakeConnectorService(XhsConnectorService):
             {"browser": browser, "max_notes": max_notes, "max_comments": max_comments}
         )
         return self.scraper
+
+
+class RecordingAnalysisPipeline:
+    def __init__(self):
+        self.calls = 0
+        self.delegate = AnalysisPipelineService()
+
+    def run_with_llm_response(self, dataset):
+        self.calls += 1
+        return self.delegate.run_with_llm_response(dataset)
+
+
+def test_frontend_llm_summary_fields_exposes_only_requested_aggregate_metrics():
+    result = frontend_llm_summary_fields(
+        {
+            "product_name": "耳机",
+            "post_analyses": [{"private": "not-for-frontend"}],
+            "summary": {
+                "sentiment_scores": {
+                    "raw": 82,
+                    "trust_aware": 76,
+                    "analysis_confidence": 88,
+                    "score_disclaimer": "分数反映评价情感倾向，不是商品客观质量分。",
+                },
+                "risk_overview": {
+                    "high_risk_content_count": 2,
+                    "high_risk_content_ratio": 0.2,
+                    "reason_distribution": [{"reason": "营销式表达", "count": 2}],
+                    "caution": "风险分数表示内容需要谨慎参考，不代表评论一定虚假。",
+                },
+            },
+        }
+    )
+
+    assert result["sentiment_scores"]["trust_aware"] == 76
+    assert result["risk_overview"]["high_risk_content_count"] == 2
+    assert "post_analyses" not in result
 
 
 def test_collection_request_defaults_and_custom_limits_reach_the_scraper():
@@ -168,6 +207,63 @@ def test_collection_job_returns_desensitized_result():
     assert completed["result"]["input"] == {"source": "taobao_or_tmall", "query": "耳机"}
 
 
+def test_collection_only_persists_data_until_analysis_is_requested(tmp_path):
+    scraper = FakeScraper(
+        {
+            "schema_version": "1.1",
+            "input": {"type": "keyword", "resolved_query": "耳机"},
+            "collection": {"note_count": 0, "comment_count": 0},
+            "notes": [],
+            "errors": [],
+        }
+    )
+    service = FakeConnectorService(scraper)
+    service.raw_persistence = PersistenceService(tmp_path / "raw")
+    service.persistence = PersistenceService(tmp_path / "processed")
+    service.result_persistence = PersistenceService(tmp_path / "result")
+    pipeline = RecordingAnalysisPipeline()
+    service.analysis_pipeline = pipeline
+
+    job = service.start_collection(CollectionRequest(source="耳机"))
+    job_id = job["job_id"]
+    collection_result = service.jobs.get(job_id)["result"]
+
+    assert collection_result["job_id"] == job_id
+    assert "llm_insights" not in collection_result
+    assert not (tmp_path / "result" / f"{job_id}.json").exists()
+    assert pipeline.calls == 0
+
+    analysis_result = service.analyze_collection(job_id)
+
+    assert analysis_result["job_id"] == job_id
+    assert "llm_insights" in analysis_result
+    assert (tmp_path / "result" / f"{job_id}.json").is_file()
+    assert pipeline.calls == 1
+
+
+def test_saved_collection_id_can_be_analyzed_after_service_restart(tmp_path):
+    job_id = "xhs_collection_saved"
+    processed = PersistenceService(tmp_path / "processed")
+    processed.save(
+        job_id,
+        {
+            "schema_version": "1.1",
+            "input": {"source": "keyword", "query": "耳机"},
+            "collection": {"note_count": 0, "comment_count": 0},
+            "notes": [],
+            "errors": [],
+        },
+    )
+    restarted_service = XhsConnectorService(job_store=JobStore(), executor=ImmediateExecutor())
+    restarted_service.persistence = processed
+    restarted_service.result_persistence = PersistenceService(tmp_path / "result")
+
+    result = restarted_service.analyze_collection(job_id)
+
+    assert result["job_id"] == job_id
+    assert "llm_insights" in result
+
+
 def test_collection_keeps_full_note_link_only_in_memory(tmp_path):
     full_note_url = "https://www.xiaohongshu.com/explore/note-1?xsec_token=private-token&xsec_source=pc_search"
     scraper = FakeScraper(
@@ -194,11 +290,8 @@ def test_collection_keeps_full_note_link_only_in_memory(tmp_path):
 
     job = service.start_collection(CollectionRequest(source="耳机"))
     completed = service.jobs.get(job["job_id"])
-    representative = completed["result"]["representative_notes"][0]
     persisted = (tmp_path / f"{job['job_id']}.json").read_text(encoding="utf-8")
 
-    assert representative["source_url"].endswith(f"/collections/{job['job_id']}/notes/note-1/open")
-    assert representative["link_expires_at"] is not None
     assert "private-token" not in str(completed["result"])
     assert "xsec_token" not in str(completed["result"])
     assert "private-token" not in persisted
@@ -230,10 +323,8 @@ def test_collection_does_not_fallback_to_a_canonical_note_url_without_a_full_lin
 
     job = service.start_collection(CollectionRequest(source="耳机"))
     completed = service.jobs.get(job["job_id"])
-    representative = completed["result"]["representative_notes"][0]
 
-    assert representative["source_url"].endswith(f"/collections/{job['job_id']}/notes/note-1/open")
-    assert representative["link_expires_at"] is None
+    assert "representative_notes" not in completed["result"]
     assert service.note_open_url(job["job_id"], "note-1") is None
 
 
@@ -403,3 +494,10 @@ def test_collection_endpoints_return_a_finished_desensitized_job(monkeypatch):
     assert progress.json()["status"] == "succeeded"
     assert result.status_code == 200
     assert result.json()["input"] == {"source": "keyword", "query": "耳机"}
+    assert "llm_insights" not in result.json()
+
+    analysis = client.post(f"/api/v1/xhs/collections/{job_id}/analysis")
+
+    assert analysis.status_code == 200
+    assert analysis.json()["job_id"] == job_id
+    assert "llm_insights" in analysis.json()

@@ -219,7 +219,7 @@ function scoreFromSentimentDistribution(distribution: AnalysisViewModel["sample"
 }
 
 function fitScoreFromCollectionView(view: AnalysisViewModel): FitScoreResult {
-  const baseScore = scoreFromSentimentDistribution(view.sample.sentiment_distribution);
+  const baseScore = view.sample.trust_aware_sentiment_score ?? scoreFromSentimentDistribution(view.sample.sentiment_distribution);
   if (baseScore === null) {
     return { score: null, message: "后端已完成采集，但当前结果缺少情感分布，暂不能生成推荐分。", validAspectCount: 0 };
   }
@@ -461,10 +461,10 @@ function render(): void {
   const summary = collectionView
     ? (collectionView.purchase_advice !== "暂无数据" ? collectionView.purchase_advice : collectionView.overall)
     : analysis.summaries[state.mode].one_sentence_summary;
-  const collectionScore = collectionView ? scoreFromSentimentDistribution(collectionView.sample.sentiment_distribution) : null;
-  const currentScore = collectionView ? collectionScore : (state.mode === "raw" ? analysis.overview.raw_sentiment_score : analysis.overview.trusted_sentiment_score);
-  const rawScore = collectionView ? collectionScore : analysis.overview.raw_sentiment_score;
-  const trustedScore = collectionView ? collectionScore : analysis.overview.trusted_sentiment_score;
+  const collectionFallbackScore = collectionView ? scoreFromSentimentDistribution(collectionView.sample.sentiment_distribution) : null;
+  const rawScore = collectionView ? (collectionView.sample.raw_sentiment_score ?? collectionFallbackScore) : analysis.overview.raw_sentiment_score;
+  const trustedScore = collectionView ? (collectionView.sample.trust_aware_sentiment_score ?? collectionFallbackScore) : analysis.overview.trusted_sentiment_score;
+  const currentScore = state.mode === "raw" ? rawScore : trustedScore;
   const confidence = collectionView ? collectionView.sample.confidence : analysis.overview.confidence;
   const fitScore = collectionView ? fitScoreFromCollectionView(collectionView) : calculateFitScore(analysis);
   const aspectRows = collectionView ? aspectsFromCollectionView(collectionView) : analysis.aspects;
@@ -617,11 +617,11 @@ function renderRisk(analysis: ProductAnalysisData): string {
   </section>`;
 }
 function renderCollectionRisk(view: AnalysisViewModel): string {
-  const riskCount = Math.round((view.sample.raw_comment_count ?? 0) * (view.sample.risk_negative_ratio ?? 0));
+  const riskCount = view.high_risk_count ?? Math.round((view.sample.raw_comment_count ?? 0) * (view.sample.risk_negative_ratio ?? 0));
   return `<section class="card risk-card">
     <div class="section-heading"><div><span class="eyebrow">内容可信风险</span><h2>风险说明</h2></div><div class="risk-total"><b>${riskCount}</b><small>条 · ${percent(view.sample.risk_negative_ratio)}</small></div></div>
     ${view.risk_reasons.length ? `<div class="risk-reasons">${view.risk_reasons.map((reason) => `<div><span>${escapeHtml(reason.reason_label)}</span><b>${reason.count}</b></div>`).join("")}</div>` : `<p class="zero-risk">当前样本中未识别到高风险内容。</p>`}
-    <div class="risk-note"><span>i</span><p>${text("风险/负面占比来自后端统计结果，仅提示内容需要谨慎参考，不代表评论一定虚假。")}</p></div>
+    <div class="risk-note"><span>i</span><p>${text(view.risk_caution ?? "风险/负面占比来自后端统计结果，仅提示内容需要谨慎参考，不代表评论一定虚假。")}</p></div>
   </section>`;
 }
 
@@ -948,7 +948,10 @@ function applyStoredProductResult(record: StoredProductResult): void {
   state.collection.config = { ...record.crawlConfig };
   state.collection.keyword = record.queryKeyword || state.collection.keyword;
   state.collection.keywordTouched = Boolean(record.queryKeyword);
-  state.collection.crawlJob = { ...record.taskStatus };
+  state.collection.crawlJob = {
+    ...record.taskStatus,
+    job_id: record.collectionJobId ?? record.taskStatus.job_id,
+  };
   state.collection.formattedPreview = record.formattedPreview;
   state.collectionResult = record.rawCollectionResult;
   if (record.noteCount || record.commentCount) {
@@ -1023,7 +1026,7 @@ function isSamePageTask(task: StoredCollectionTask, product: PageProduct): boole
 }
 
 function isCollectionRunning(status: string): boolean {
-  return ["queued", "running", "crawling", "cleaning", "llm_extracting", "analyzing", "formatting"].includes(status);
+  return ["queued", "running", "crawling"].includes(status);
 }
 
 function collectionTaskFromRequest(jobId: string, request: CrawlStartRequest): StoredCollectionTask {
@@ -1331,22 +1334,19 @@ async function pollCollectionJob(jobId: string, request: CrawlStartRequest, vers
     if (fetchedCompletedResults.has(jobId)) return;
     fetchedCompletedResults.add(jobId);
     const result = await crawlerClient.getCollectionResult(jobId, controller.signal);
-    const payload = resultPayload(result);
     const preview = previewFromCollectionResponse(result, request);
     if (currentProductKey !== requestProductKey) {
       const previousPage = state.pageProduct;
       state.pageProduct = request.page_product;
-      state.collectionResult = payload;
       state.collection.formattedPreview = preview;
       state.collection.crawlJob = { ...state.collection.crawlJob, collected_notes: preview.note_count, collected_comments: preview.comment_count };
-      await saveProductResult(requestProductKey, { rawCollectionResult: payload, formattedPreview: preview, completedAt: new Date().toISOString() });
+      await saveProductResult(requestProductKey, { formattedPreview: preview, completedAt: new Date().toISOString() });
       state.pageProduct = previousPage;
       return;
     }
     state.collection.formattedPreview = preview;
-    state.collectionResult = payload;
     state.collection.crawlJob = { ...state.collection.crawlJob, collected_notes: preview.note_count, collected_comments: preview.comment_count };
-    await saveProductResult(requestProductKey, { rawCollectionResult: payload, formattedPreview: preview, completedAt: new Date().toISOString() });
+    await saveProductResult(requestProductKey, { formattedPreview: preview, completedAt: new Date().toISOString() });
     await clearStoredCollectionTask();
     render();
     return;
@@ -1379,12 +1379,10 @@ async function restoreActiveCollectionTask(): Promise<void> {
     }
     if (state.collection.crawlJob.status === "completed") {
       const result = await crawlerClient.getCollectionResult(storedTask.jobId, controller.signal);
-      const payload = resultPayload(result);
       const preview = previewFromCollectionResponse(result, restoredRequest);
       state.collection.formattedPreview = preview;
-      state.collectionResult = payload;
       state.collection.crawlJob = { ...state.collection.crawlJob, collected_notes: preview.note_count, collected_comments: preview.comment_count };
-      await saveProductResult(productKeyFor(state.pageProduct), { rawCollectionResult: payload, formattedPreview: preview, completedAt: new Date().toISOString() });
+      await saveProductResult(productKeyFor(state.pageProduct), { formattedPreview: preview, completedAt: new Date().toISOString() });
       await clearStoredCollectionTask();
       render();
       return;
@@ -1445,12 +1443,27 @@ function resetCrawlTask(): void {
 
 async function submitFormattedPreview(): Promise<void> {
   if (!state.collection.formattedPreview || state.collection.submitting) return;
+  if (!["completed", "succeeded"].includes(state.collection.crawlJob.status)) {
+    state.collection.submitMessage = "采集任务尚未完成，暂时不能分析。";
+    render();
+    return;
+  }
+  const jobId = state.collection.crawlJob.job_id;
+  if (!jobId) {
+    state.collection.submitMessage = "找不到本次采集任务 ID，请重新采集后再分析。";
+    render();
+    return;
+  }
   state.collection.submitting = true;
   state.collection.submitMessage = null;
   render();
   try {
-    await wait(200);
-    state.collection.submitMessage = USE_MOCK ? "Mock：已模拟提交给后端分析。" : "后端已完成采集与分析，页面下方已展示真实分析结果。";
+    const result = await crawlerClient.analyzeCollection(jobId, controller.signal);
+    state.collectionResult = resultPayload(result);
+    if (currentProductKey) await saveProductResult(currentProductKey, { rawCollectionResult: state.collectionResult });
+    state.collection.submitMessage = USE_MOCK ? "Mock：已完成模拟分析。" : "已完成本次采集数据的分析。";
+  } catch (error: unknown) {
+    state.collection.submitMessage = collectionErrorMessage(error) || "分析请求失败，请稍后重试。";
   } finally {
     state.collection.submitting = false;
     render();

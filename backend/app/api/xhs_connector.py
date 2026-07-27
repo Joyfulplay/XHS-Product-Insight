@@ -139,6 +139,25 @@ def normalize_collection_dataset(dataset: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def frontend_llm_summary_fields(llm_response: dict[str, Any] | None) -> dict[str, Any]:
+    """Expose validated aggregate metrics without returning raw LLM post data."""
+
+    if not isinstance(llm_response, dict):
+        return {}
+    summary = llm_response.get("summary")
+    if not isinstance(summary, dict):
+        return {}
+
+    result: dict[str, Any] = {}
+    sentiment_scores = summary.get("sentiment_scores")
+    if isinstance(sentiment_scores, dict):
+        result["sentiment_scores"] = sanitize_value(sentiment_scores)
+    risk_overview = summary.get("risk_overview")
+    if isinstance(risk_overview, dict):
+        result["risk_overview"] = sanitize_value(risk_overview)
+    return result
+
+
 class LoginRequest(BaseModel):
     browser: BrowserName = "auto"
     force: bool = False
@@ -342,28 +361,13 @@ class XhsConnectorService:
             note_open_links = self._extract_note_open_links(dataset)
             processed_dataset = normalize_collection_dataset(dataset)
             processed_storage_path = self.persistence.save(job_id, processed_dataset)
-            self.jobs.update(job_id, stage="cleaning", progress=0.55)
-            analysis, llm_response = self.analysis_pipeline.run_with_llm_response(processed_dataset)
-            analysis_result = analysis.model_dump(mode="json")
-            result_storage_path = self.result_persistence.save(
-                job_id,
-                {
-                    "job_id": job_id,
-                    "llm_response": llm_response,
-                    "analysis": analysis_result,
-                },
-            )
-            expires_at = self._store_note_open_links(job_id, note_open_links)
-            self._attach_note_open_urls(analysis_result, job_id, note_open_links, expires_at)
-            self.jobs.update(job_id, stage="statistical_analysis", progress=0.85)
-            result = {**processed_dataset, **analysis_result}
-            self.jobs.update(job_id, stage="persisting", progress=0.95)
+            self._store_note_open_links(job_id, note_open_links)
             result = {
-                **result,
+                **processed_dataset,
+                "job_id": job_id,
                 "storage": {
                     "raw_path": raw_storage_path,
                     "processed_path": processed_storage_path,
-                    "result_path": result_storage_path,
                 },
             }
         except Exception as exc:
@@ -384,6 +388,38 @@ class XhsConnectorService:
             progress=1.0,
             result=result,
         )
+
+    def analyze_collection(self, job_id: str) -> dict[str, Any]:
+        """Analyze precisely the dataset saved by one completed collection job."""
+
+        job = self.jobs.get(job_id)
+        if job is not None and job["kind"] != "collection":
+            raise KeyError(job_id)
+        if job is not None and job["status"] != "succeeded":
+            raise RuntimeError("采集任务尚未完成")
+        if job is not None and job.get("analysis_result") is not None:
+            return job["analysis_result"]
+
+        dataset = self.persistence.load(job_id)
+        if dataset is None:
+            if job is None:
+                raise KeyError(job_id)
+            raise RuntimeError("找不到该采集任务对应的数据文件")
+        dataset["task_id"] = job_id
+        analysis, llm_response = self.analysis_pipeline.run_with_llm_response(dataset)
+        analysis_result = analysis.model_dump(mode="json")
+        analysis_result.update(frontend_llm_summary_fields(llm_response))
+        links = self._note_open_links.get(job_id, {})
+        self._attach_note_open_urls(analysis_result, job_id, {key: value[0] for key, value in links.items()}, datetime.now(timezone.utc))
+        result = {**analysis_result, "job_id": job_id}
+        result_storage_path = self.result_persistence.save(
+            job_id,
+            {"job_id": job_id, "llm_response": llm_response, "analysis": result},
+        )
+        result["storage"] = {"result_path": result_storage_path}
+        if job is not None:
+            self.jobs.update(job_id, analysis_result=result)
+        return result
 
     @staticmethod
     def _extract_note_open_links(dataset: dict[str, Any]) -> dict[str, str]:
@@ -558,6 +594,16 @@ def get_collection_result(job_id: str) -> dict[str, Any]:
     if job["status"] != "succeeded":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="采集任务尚未完成")
     return job["result"]
+
+
+@router.post("/collections/{job_id}/analysis")
+def analyze_collection(job_id: str) -> dict[str, Any]:
+    try:
+        return service.analyze_collection(job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="任务不存在") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 
 @router.get("/collections/{job_id}/notes/{note_id}/open", include_in_schema=False)

@@ -14,5 +14,6 @@ export const apiPaths = {
     collection: "/xhs/collections",
     collectionJob: (jobId: string) => `/xhs/collections/${encodeURIComponent(jobId)}`,
     collectionResult: (jobId: string) => `/xhs/collections/${encodeURIComponent(jobId)}/result`,
+    collectionAnalysis: (jobId: string) => `/xhs/collections/${encodeURIComponent(jobId)}/analysis`,
   },
 } as const;

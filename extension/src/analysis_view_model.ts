@@ -127,7 +127,7 @@ function normalizeAttributes(input: unknown, aspects: AnyRecord[]): AnalysisView
 }
 
 function normalizeRiskReasons(input: unknown): AnalysisViewModel["risk_reasons"] {
-  return firstRecordArray(input, ["risk_summary.risk_reason_distribution", "risk.risk_reason_distribution", "risk.reasons"]).map((item) => ({
+  return firstRecordArray(input, ["risk_overview.reason_distribution", "risk_summary.risk_reason_distribution", "risk.risk_reason_distribution", "risk.reasons"]).map((item) => ({
     reason_code: firstString(item, ["reason_code", "code", "reason"], "unknown"),
     reason_label: firstString(item, ["reason_label", "label", "name", "reason"], "暂无数据"),
     count: firstNumber(item, ["count", "mentions"], 0) ?? 0,
@@ -206,9 +206,14 @@ export function normalizeAnalysisResult(input: ProductAnalysisData | unknown | n
     "effective_comment_count",
   ], null);
   const totalContent = firstNumber(analysis, ["coverage.total_content_count"], null);
-  const highRisk = firstNumber(analysis, ["risk_summary.high_risk_count", "risk.high_risk_count", "risk.negative_count"], 0) ?? 0;
-  const confidence = firstNumber(analysis, ["overview.confidence", "confidence", "statistics.confidence"], null);
-  const riskRatio = firstNumber(analysis, ["statistics.risk_ratio", "risk_summary.high_risk_ratio", "risk.high_risk_ratio", "risk.negative_ratio", "negative_ratio"], null);
+  const highRisk = firstNumber(analysis, ["risk_overview.high_risk_content_count", "risk_summary.high_risk_count", "risk.high_risk_count", "risk.negative_count"], null);
+  const llmConfidenceScore = firstNumber(analysis, ["sentiment_scores.analysis_confidence"], null);
+  const confidence = llmConfidenceScore !== null
+    ? llmConfidenceScore / 100
+    : firstNumber(analysis, ["overview.confidence", "confidence", "statistics.confidence"], null);
+  const rawSentimentScore = firstNumber(analysis, ["sentiment_scores.raw", "overview.raw_sentiment_score"], null);
+  const trustAwareSentimentScore = firstNumber(analysis, ["sentiment_scores.trust_aware", "overview.trusted_sentiment_score"], null);
+  const riskRatio = firstNumber(analysis, ["risk_overview.high_risk_content_ratio", "statistics.risk_ratio", "risk_summary.high_risk_ratio", "risk.high_risk_ratio", "risk.negative_ratio", "negative_ratio"], null);
   const sentimentDistribution = isRecord(getPath(analysis, "statistics.sentiment_distribution"))
     ? {
       positive: firstNumber(analysis, ["statistics.sentiment_distribution.positive"], null),
@@ -224,10 +229,11 @@ export function normalizeAnalysisResult(input: ProductAnalysisData | unknown | n
   const explicitUnsuitable = firstStringArray(analysis, ["llm_insights.unsuitable_users", "unsuitable_users", "not_suitable_users", "insights.unsuitable_users"]);
   const riskReasons = normalizeRiskReasons(analysis);
   const normalizedRawComments = rawCommentCount ?? totalContent ?? 0;
-  const normalizedValidComments = validCommentCount ?? (totalContent !== null ? Math.max(0, totalContent - highRisk) : null);
+  const normalizedValidComments = validCommentCount ?? (totalContent !== null ? Math.max(0, totalContent - (highRisk ?? 0)) : null);
   const hasLlmInsights = isRecord(getPath(analysis, "llm_insights"));
+  const hasLlmSummaryMetrics = isRecord(getPath(analysis, "sentiment_scores")) || isRecord(getPath(analysis, "risk_overview"));
   const hasStatistics = isRecord(getPath(analysis, "statistics"));
-  const analysisSource = firstString(analysis, ["analysis_source", "llm_source", "llm_insights.source", "llm_insights.analysis_source", "statistics.analysis_source"], "") || (hasLlmInsights ? "llm" : hasStatistics ? "statistics" : null);
+  const analysisSource = firstString(analysis, ["analysis_source", "llm_source", "llm_insights.source", "llm_insights.analysis_source", "statistics.analysis_source"], "") || (hasLlmSummaryMetrics || hasLlmInsights ? "llm" : hasStatistics ? "statistics" : null);
 
   return {
     sample: {
@@ -236,6 +242,8 @@ export function normalizeAnalysisResult(input: ProductAnalysisData | unknown | n
       valid_comment_count: normalizedValidComments,
       risk_negative_ratio: riskRatio,
       sentiment_distribution: sentimentDistribution,
+      raw_sentiment_score: rawSentimentScore,
+      trust_aware_sentiment_score: trustAwareSentimentScore,
       analysis_source: analysisSource,
       confidence,
       low_confidence: confidence !== null ? confidence < 0.65 : normalizedRawComments < 20,
@@ -249,7 +257,9 @@ export function normalizeAnalysisResult(input: ProductAnalysisData | unknown | n
     unsuitable_users: explicitUnsuitable,
     purchase_advice: firstString(analysis, ["llm_insights.purchase_advice", "purchase_advice", "buying_advice", "recommendation", "insights.purchase_advice", "summaries.trust_aware.one_sentence_summary"], "暂无数据"),
     keywords,
+    high_risk_count: highRisk,
     risk_reasons: riskReasons,
+    risk_caution: firstString(analysis, ["risk_overview.caution", "risk_summary.display_note", "risk.caution"], "") || null,
     evidence: sources.map(evidenceFromSource),
     empty_message: noteCount === 0 ? "后端采集已完成，但未采集到小红书笔记。可以修改关键词后重新采集。" : null,
   };
