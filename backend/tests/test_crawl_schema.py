@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from app.data.crawlers.xhs_client import DEFAULT_RAW_DATA_DIR, default_output_path
+from app.crawlers.xhs_client import DEFAULT_RAW_DATA_DIR, default_output_path
 from app.schemas.crawler import CrawlDataset
 
 

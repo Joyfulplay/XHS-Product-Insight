@@ -318,12 +318,15 @@ export interface CrawlJobData {
   collected_comments: number;
   error_message: string | null;
   message?: string | null;
+  analysis_status?: "idle" | "running" | "succeeded" | "failed";
+  analysis_stage?: string;
+  analysis_progress?: number;
+  analysis_message?: string | null;
 }
 
 export interface CrawlStartRequest {
   keyword: string;
   page_product: PageProduct;
-  preferences: Record<string, number>;
   config: CrawlConfig;
 }
 
@@ -334,6 +337,10 @@ export interface CollectionStartResponse {
   progress?: number | null;
   message?: string | null;
   error?: string | { code?: string; message?: string } | null;
+  analysis_status?: "idle" | "running" | "succeeded" | "failed";
+  analysis_stage?: string;
+  analysis_progress?: number | null;
+  analysis_message?: string | null;
 }
 
 export interface CollectionJobResponse {
@@ -346,6 +353,10 @@ export interface CollectionJobResponse {
   message?: string | null;
   error_message?: string | null;
   error?: string | { code?: string; message?: string } | null;
+  analysis_status?: "idle" | "running" | "succeeded" | "failed";
+  analysis_stage?: string;
+  analysis_progress?: number | null;
+  analysis_message?: string | null;
 }
 
 export interface CollectionResultResponse {
@@ -462,7 +473,6 @@ export interface AnalysisViewModel {
 export interface FormattedCrawlerDataPreview {
   product: PageProduct;
   keyword: string;
-  preferences: Record<string, number>;
   note_count: number;
   comment_count: number;
   generated_at: string;

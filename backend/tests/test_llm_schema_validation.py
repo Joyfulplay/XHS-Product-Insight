@@ -248,6 +248,31 @@ def test_service_validates_both_stages_and_complete_batch():
     ]
 
 
+def test_service_reports_stage_one_before_stage_two():
+    llm = SchemaAwareFakeLlm()
+    service = XiaohongshuInsightService(llm, max_workers=1, max_images_per_post=1)
+    events = []
+
+    service.analyze_batch(
+        "测试耳机",
+        [{
+            "note_id": "note-1",
+            "url": "https://www.xiaohongshu.com/explore/note-1",
+            "title": "测试笔记",
+            "text": "测试耳机体验不错。",
+            "images": [],
+            "comments": [],
+        }],
+        progress_callback=lambda stage, progress, message: events.append(
+            (stage, progress, message)
+        ),
+    )
+
+    assert events[0][0] == "llm_stage_1"
+    assert events[-1][0] == "llm_stage_2"
+    assert [event[1] for event in events] == sorted(event[1] for event in events)
+
+
 def test_post_schema_rejects_duplicate_evidence_ids():
     payload = valid_post_output()
     payload["evidence_items"] = [

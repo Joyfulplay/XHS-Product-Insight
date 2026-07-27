@@ -1,7 +1,7 @@
-# 小红书商品笔记爬虫使用说明
+# 小红书采集与后端使用说明
 
-本文说明如何安装、登录和运行 `xhs_client.py`。所有命令均从项目根目录执行，
-不依赖任何个人电脑的绝对路径。
+本文说明如何安装依赖、启动本地后端、登录小红书和独立运行
+`xhs_client.py`。所有命令均从项目根目录执行，不依赖任何个人电脑的绝对路径。
 
 ## 1. 环境要求
 
@@ -37,18 +37,38 @@ python3 -m venv .venv
 ### Windows PowerShell
 
 ```powershell
-.\.venv\Scripts\python.exe -m pip install -r .\backend\app\data\crawlers\requirements.txt
+.\.venv\Scripts\python.exe -m pip install -r .\requirements.txt
 ```
 
 ### macOS / Linux
 
 ```bash
-./.venv/bin/python -m pip install -r ./backend/app/data/crawlers/requirements.txt
+./.venv/bin/python -m pip install -r ./requirements.txt
 ```
 
 登录直接使用系统已安装的 Edge 或 Chrome，不需要安装专用浏览器运行时。
 
-## 4. 登录小红书
+## 4. 启动本地后端
+
+`backend/main.py` 会启动 FastAPI 服务，并监听
+`http://127.0.0.1:8000`。运行期间请保持终端窗口开启。
+
+### Windows PowerShell
+
+```powershell
+.\.venv\Scripts\python.exe .\backend\main.py
+```
+
+### macOS / Linux
+
+```bash
+./.venv/bin/python ./backend/main.py
+```
+
+启动后可访问 `http://127.0.0.1:8000/` 确认服务状态。浏览器插件使用的接口位于
+`/api/v1/xhs/`。
+
+## 5. 登录小红书
 
 脚本默认先尝试系统 Edge，启动失败时自动尝试 Chrome。浏览器始终可见，扫码期间
 不要提前关闭。登录 Cookie 保存到当前用户目录下的
@@ -57,13 +77,13 @@ python3 -m venv .venv
 ### Windows PowerShell
 
 ```powershell
-.\.venv\Scripts\python.exe .\backend\app\data\crawlers\xhs_client.py --login
+.\.venv\Scripts\python.exe .\backend\app\crawlers\xhs_client.py --login
 ```
 
 ### macOS / Linux
 
 ```bash
-./.venv/bin/python ./backend/app/data/crawlers/xhs_client.py --login
+./.venv/bin/python ./backend/app/crawlers/xhs_client.py --login
 ```
 
 登录步骤：
@@ -76,13 +96,13 @@ python3 -m venv .venv
 强制使用 Chrome：
 
 ```powershell
-.\.venv\Scripts\python.exe .\backend\app\data\crawlers\xhs_client.py --login --browser chrome
+.\.venv\Scripts\python.exe .\backend\app\crawlers\xhs_client.py --login --browser chrome
 ```
 
 强制使用 Edge：
 
 ```powershell
-.\.venv\Scripts\python.exe .\backend\app\data\crawlers\xhs_client.py --login --browser edge
+.\.venv\Scripts\python.exe .\backend\app\crawlers\xhs_client.py --login --browser edge
 ```
 
 脚本使用项目独立资料目录：
@@ -108,18 +128,18 @@ python3 -m venv .venv
 ./.venv/bin/xhs status
 ```
 
-## 5. 按商品关键词采集
+## 6. 按商品关键词采集
 
 ### Windows PowerShell
 
 ```powershell
-.\.venv\Scripts\python.exe .\backend\app\data\crawlers\xhs_client.py "索尼XM5"
+.\.venv\Scripts\python.exe .\backend\app\crawlers\xhs_client.py "索尼XM5"
 ```
 
 ### macOS / Linux
 
 ```bash
-./.venv/bin/python ./backend/app/data/crawlers/xhs_client.py "索尼XM5"
+./.venv/bin/python ./backend/app/crawlers/xhs_client.py "索尼XM5"
 ```
 
 默认行为：
@@ -132,23 +152,23 @@ python3 -m venv .venv
 - 每篇笔记最多读取 3 页一级评论。
 - 优先处理标题中包含测评、使用体验、降噪、音质、佩戴、续航、避雷等词的笔记。
 
-## 6. 按小红书链接采集
+## 7. 按小红书链接采集
 
 支持小红书笔记链接、带访问参数的搜索结果链接和小红书短链接。
 
 ### Windows PowerShell
 
 ```powershell
-.\.venv\Scripts\python.exe .\backend\app\data\crawlers\xhs_client.py "小红书笔记链接"
+.\.venv\Scripts\python.exe .\backend\app\crawlers\xhs_client.py "小红书笔记链接"
 ```
 
 ### macOS / Linux
 
 ```bash
-./.venv/bin/python ./backend/app/data/crawlers/xhs_client.py "小红书笔记链接"
+./.venv/bin/python ./backend/app/crawlers/xhs_client.py "小红书笔记链接"
 ```
 
-## 7. 按淘宝或天猫链接采集
+## 8. 按淘宝或天猫链接采集
 
 输入淘宝或天猫商品链接时，脚本可以使用 Playwright 读取商品标题，再将标题作为
 小红书搜索关键词。
@@ -156,43 +176,43 @@ python3 -m venv .venv
 ### Windows PowerShell
 
 ```powershell
-.\.venv\Scripts\python.exe .\backend\app\data\crawlers\xhs_client.py "淘宝或天猫商品链接"
+.\.venv\Scripts\python.exe .\backend\app\crawlers\xhs_client.py "淘宝或天猫商品链接"
 ```
 
 为了提高速度和关键词准确性，推荐通过 `--query` 手动指定商品名称：
 
 ```powershell
-.\.venv\Scripts\python.exe .\backend\app\data\crawlers\xhs_client.py "淘宝或天猫商品链接" --query "索尼 WH-1000XM5"
+.\.venv\Scripts\python.exe .\backend\app\crawlers\xhs_client.py "淘宝或天猫商品链接" --query "索尼 WH-1000XM5"
 ```
 
 macOS / Linux 使用相同参数，只需将 Python 路径改为 `./.venv/bin/python`。
 
-## 8. 自定义采集参数
+## 9. 自定义采集参数
 
 ### Windows PowerShell
 
 ```powershell
-.\.venv\Scripts\python.exe .\backend\app\data\crawlers\xhs_client.py "索尼XM5" `
+.\.venv\Scripts\python.exe .\backend\app\crawlers\xhs_client.py "索尼XM5" `
   --candidates 50 `
   --max-notes 10 `
   --max-comments 20 `
   --min-note-likes 10 `
   --min-comment-likes 2 `
   --delay 1 `
-  --output ".\backend\app\data\raw\sony_xm5.json"
+  --output ".\data\raw\sony_xm5.json"
 ```
 
 ### macOS / Linux
 
 ```bash
-./.venv/bin/python ./backend/app/data/crawlers/xhs_client.py "索尼XM5" \
+./.venv/bin/python ./backend/app/crawlers/xhs_client.py "索尼XM5" \
   --candidates 50 \
   --max-notes 10 \
   --max-comments 20 \
   --min-note-likes 10 \
   --min-comment-likes 2 \
   --delay 1 \
-  --output "./backend/app/data/raw/sony_xm5.json"
+  --output "./data/raw/sony_xm5.json"
 ```
 
 参数说明：
@@ -216,16 +236,16 @@ macOS / Linux 使用相同参数，只需将 Python 路径改为 `./.venv/bin/py
 ### Windows PowerShell
 
 ```powershell
-.\.venv\Scripts\python.exe .\backend\app\data\crawlers\xhs_client.py --help
+.\.venv\Scripts\python.exe .\backend\app\crawlers\xhs_client.py --help
 ```
 
 ### macOS / Linux
 
 ```bash
-./.venv/bin/python ./backend/app/data/crawlers/xhs_client.py --help
+./.venv/bin/python ./backend/app/crawlers/xhs_client.py --help
 ```
 
-## 9. 输出数据
+## 10. 输出数据
 
 未指定 `--output` 时，脚本会在项目根目录的 `data/raw/` 中生成：
 
@@ -245,7 +265,7 @@ data/raw/xhs_dataset_年月日_时分秒.json
 当前版本只保存正文图片 URL，不下载图片，也不执行 OCR。输出 URL 不包含
 `xsec_token`，登录 Cookie 和临时访问令牌不会写入数据集。
 
-## 10. 常见问题
+## 11. 常见问题
 
 ### `AUTH_REQUIRED`
 
@@ -273,10 +293,10 @@ data/raw/xhs_dataset_年月日_时分秒.json
 检查商品关键词是否准确，也可以临时降低笔记点赞阈值进行测试：
 
 ```powershell
-.\.venv\Scripts\python.exe .\backend\app\data\crawlers\xhs_client.py "索尼XM5" --min-note-likes 0
+.\.venv\Scripts\python.exe .\backend\app\crawlers\xhs_client.py "索尼XM5" --min-note-likes 0
 ```
 
-## 11. 数据与账号安全
+## 12. 数据与账号安全
 
 - 不要提交 `.venv/`、`.runtime/`、Cookie、Token、账号信息和浏览器配置目录。
 - 原始数据集是否提交到仓库，应遵循团队的数据管理约定。

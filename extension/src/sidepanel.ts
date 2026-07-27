@@ -53,7 +53,6 @@ const state: {
   job: RefreshJobData | null;
   refreshing: boolean;
   notice: string | null;
-  preferences: PreferenceWeights;
   collection: CollectionFlowState;
   demoScenarios: DemoProductScenario[];
   selectedDemoScenarioId: DemoScenarioId | null;
@@ -72,22 +71,9 @@ const state: {
   job: null,
   refreshing: false,
   notice: null,
-  preferences: { noise_cancellation: 5, sound_quality: 4, comfort: 3, battery_life: 3, microphone: 2, price_value: 3 },
   collection: createInitialCollectionFlowState(),
   demoScenarios: USE_MOCK && apiClient.getDemoScenarios ? apiClient.getDemoScenarios() : [],
   selectedDemoScenarioId: USE_MOCK && apiClient.getCurrentDemoScenarioId ? apiClient.getCurrentDemoScenarioId() : null,
-};
-
-type PreferenceKey = "noise_cancellation" | "sound_quality" | "comfort" | "battery_life" | "microphone" | "price_value";
-type PreferenceWeights = Record<PreferenceKey, number>;
-
-const preferenceLabels: Record<PreferenceKey, string> = {
-  noise_cancellation: "通勤降噪",
-  sound_quality: "音质",
-  comfort: "长时间佩戴",
-  battery_life: "续航",
-  microphone: "通话效果",
-  price_value: "性价比",
 };
 
 const controller = new AbortController();
@@ -174,131 +160,24 @@ function score(value: number | null): string {
   return value === null ? "暂无数据" : String(Math.round(value));
 }
 
-interface FitScoreResult {
-  score: number | null;
-  message: string | null;
-  validAspectCount: number;
-}
-
-function clampScore(value: number): number {
-  return Math.max(0, Math.min(100, value));
-}
-
-function aspectScoreMap(analysis: ProductAnalysisData): Partial<Record<PreferenceKey, number>> {
-  return Object.fromEntries(
-    analysis.aspects
-      .filter((aspect): aspect is Aspect & { aspect_code: PreferenceKey; trusted_sentiment_score: number } =>
-        (Object.keys(preferenceLabels) as string[]).includes(aspect.aspect_code) && aspect.trusted_sentiment_score !== null,
-      )
-      .map((aspect) => [aspect.aspect_code, aspect.trusted_sentiment_score]),
-  ) as Partial<Record<PreferenceKey, number>>;
-}
-
-function calculateFitScore(analysis: ProductAnalysisData, preferences = state.preferences): FitScoreResult {
-  const scores = aspectScoreMap(analysis);
-  const weighted = (Object.entries(preferences) as Array<[PreferenceKey, number]>)
-    .filter(([key, weight]) => weight > 0 && scores[key] !== undefined)
-    .map(([key, weight]) => ({ score: scores[key] ?? 0, weight }));
-
-  if ((Object.values(preferences) as number[]).every((weight) => weight === 0)) {
-    return { score: null, message: "请至少选择一个关注点", validAspectCount: 0 };
-  }
-  if (weighted.length < 2) {
-    return { score: null, message: "数据不足，暂不能生成稳定推荐", validAspectCount: weighted.length };
-  }
-
-  const weightSum = weighted.reduce((sum, item) => sum + item.weight, 0);
-  const fitScore = weighted.reduce((sum, item) => sum + item.score * item.weight, 0) / weightSum;
-  return { score: clampScore(fitScore), message: null, validAspectCount: weighted.length };
-}
-function scoreFromSentimentDistribution(distribution: AnalysisViewModel["sample"]["sentiment_distribution"]): number | null {
-  if (!distribution) return null;
-  const positive = distribution.positive ?? 0;
-  const neutral = distribution.neutral ?? 0;
-  return clampScore(positive * 100 + neutral * 50);
-}
-
-function fitScoreFromCollectionView(view: AnalysisViewModel): FitScoreResult {
-  const baseScore = view.sample.trust_aware_sentiment_score ?? scoreFromSentimentDistribution(view.sample.sentiment_distribution);
-  if (baseScore === null) {
-    return { score: null, message: "后端已完成采集，但当前结果缺少情感分布，暂不能生成推荐分。", validAspectCount: 0 };
-  }
-  if (view.sample.note_count < 3) {
-    return { score: baseScore, message: "样本量偏少，推荐分仅作初步参考。", validAspectCount: view.attributes.length };
-  }
-  return { score: baseScore, message: null, validAspectCount: view.attributes.length };
-}
-
 function aspectCodeFromLabel(label: string, index: number): string {
   return `collection_aspect_${index}_${label.replace(/\s+/g, "_").slice(0, 24)}`;
 }
 
 function aspectsFromCollectionView(view: AnalysisViewModel): Aspect[] {
-  if (view.llm_summary?.aspects.length) {
-    return view.llm_summary.aspects.map((aspect, index) => ({
-      aspect_code: aspectCodeFromLabel(aspect.name, index),
-      aspect_label: aspect.name,
-      mention_count: aspect.mention_count,
-      raw_sentiment_score: null,
-      trusted_sentiment_score: aspect.trust_aware_score,
-      positive_ratio: aspect.positive_ratio,
-      neutral_ratio: aspect.neutral_ratio,
-      negative_ratio: aspect.negative_ratio,
-      platform_disagreement_score: null,
-      top_claim_ids: [],
-      evidence_content_ids: aspect.evidence_ids,
-    }));
-  }
-  const sentiment = view.sample.sentiment_distribution;
-  const fallbackScore = scoreFromSentimentDistribution(sentiment);
-  return view.attributes.slice(0, 8).map((attribute, index) => {
-    const positive = attribute.positive_mentions ?? null;
-    const negative = attribute.negative_mentions ?? null;
-    const mentionCount = positive !== null || negative !== null ? (positive ?? 0) + (negative ?? 0) : view.sample.note_count;
-    const positiveRatio = mentionCount > 0 && positive !== null ? positive / mentionCount : sentiment?.positive ?? null;
-    const negativeRatio = mentionCount > 0 && negative !== null ? negative / mentionCount : sentiment?.negative ?? null;
-    const neutralRatio = positiveRatio !== null && negativeRatio !== null ? Math.max(0, 1 - positiveRatio - negativeRatio) : sentiment?.neutral ?? null;
-    const aspectScore = positiveRatio !== null && neutralRatio !== null ? clampScore(positiveRatio * 100 + neutralRatio * 50) : fallbackScore;
-    return {
-      aspect_code: aspectCodeFromLabel(attribute.name, index),
-      aspect_label: attribute.name,
-      mention_count: mentionCount,
-      raw_sentiment_score: aspectScore,
-      trusted_sentiment_score: aspectScore,
-      positive_ratio: positiveRatio,
-      neutral_ratio: neutralRatio,
-      negative_ratio: negativeRatio,
-      platform_disagreement_score: null,
-      top_claim_ids: [],
-      evidence_content_ids: [],
-    };
-  });
-}
-
-function recommendationGrade(value: number | null): string {
-  if (value === null) return "待判断";
-  if (value >= 85) return "强推荐";
-  if (value >= 75) return "推荐";
-  if (value >= 65) return "谨慎推荐";
-  return "不优先推荐";
-}
-
-function recommendationReason(analysis: ProductAnalysisData): string {
-  const scores = aspectScoreMap(analysis);
-  const prioritized = (Object.entries(state.preferences) as Array<[PreferenceKey, number]>)
-    .filter(([key, weight]) => weight > 0 && scores[key] !== undefined)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 2)
-    .map(([key]) => `${preferenceLabels[key]} ${score(scores[key] ?? null)}`);
-  return prioritized.length ? `当前权重下主要由 ${prioritized.join("、")} 拉动推荐分。` : "当前关注点不足，暂不能生成稳定推荐理由。";
-}
-
-function recommendationCaution(analysis: ProductAnalysisData): string {
-  const scores = aspectScoreMap(analysis);
-  const weakest = (Object.entries(state.preferences) as Array<[PreferenceKey, number]>)
-    .filter(([key, weight]) => weight > 0 && scores[key] !== undefined)
-    .sort((a, b) => (scores[a[0]] ?? 100) - (scores[b[0]] ?? 100))[0];
-  return weakest ? `注意 ${preferenceLabels[weakest[0]]} 的可信评分为 ${score(scores[weakest[0]] ?? null)}，建议结合证据查看。` : "注意当前为演示数据，不代表当前页面商品的真实分析。";
+  return view.llm_summary?.aspects.map((aspect, index) => ({
+    aspect_code: aspectCodeFromLabel(aspect.name, index),
+    aspect_label: aspect.name,
+    mention_count: aspect.mention_count,
+    raw_sentiment_score: null,
+    trusted_sentiment_score: aspect.trust_aware_score,
+    positive_ratio: aspect.positive_ratio,
+    neutral_ratio: aspect.neutral_ratio,
+    negative_ratio: aspect.negative_ratio,
+    platform_disagreement_score: null,
+    top_claim_ids: [],
+    evidence_content_ids: aspect.evidence_ids,
+  })) ?? [];
 }
 
 function percent(value: number | null): string {
@@ -355,7 +234,6 @@ function previewFromCollectionResult(result: unknown, request: CrawlStartRequest
   return {
     product: request.page_product,
     keyword: request.keyword,
-    preferences: request.preferences,
     note_count: view.sample.note_count,
     comment_count: view.sample.raw_comment_count ?? 0,
     generated_at: new Date().toISOString(),
@@ -469,12 +347,10 @@ function render(): void {
       ? (state.mode === "raw" ? collectionPurchaseReference.raw_one_liner : collectionPurchaseReference.trust_aware_one_liner)
       : (collectionView.purchase_advice !== "暂无数据" ? collectionView.purchase_advice : collectionView.overall))
     : analysis.summaries[state.mode].one_sentence_summary;
-  const collectionFallbackScore = collectionView ? scoreFromSentimentDistribution(collectionView.sample.sentiment_distribution) : null;
-  const rawScore = collectionView ? (collectionView.sample.raw_sentiment_score ?? collectionFallbackScore) : analysis.overview.raw_sentiment_score;
-  const trustedScore = collectionView ? (collectionView.sample.trust_aware_sentiment_score ?? collectionFallbackScore) : analysis.overview.trusted_sentiment_score;
+  const rawScore = collectionView ? collectionView.sample.raw_sentiment_score : analysis.overview.raw_sentiment_score;
+  const trustedScore = collectionView ? collectionView.sample.trust_aware_sentiment_score : analysis.overview.trusted_sentiment_score;
   const currentScore = state.mode === "raw" ? rawScore : trustedScore;
   const confidence = collectionView ? collectionView.sample.confidence : analysis.overview.confidence;
-  const fitScore = collectionView ? fitScoreFromCollectionView(collectionView) : calculateFitScore(analysis);
   const aspectRows = collectionView ? aspectsFromCollectionView(collectionView) : analysis.aspects;
   const failures = analysis.data_status.platform_failures ?? [];
 
@@ -495,12 +371,9 @@ function render(): void {
       </section>
 
       ${USE_MOCK ? `<div class="category-banner"><strong>试运行模式</strong><span>当前使用 Mock 数据完成 dry run。</span></div>` : ""}
-      ${renderCollectionFlow(state.collection, pageProduct, state.preferences, USE_MOCK)}
+      ${renderCollectionFlow(state.collection, pageProduct, USE_MOCK)}
       ${USE_MOCK ? `<div class="demo-banner"><strong>Mock 小红书数据</strong><span>当前分析结果为小红书笔记与评论 Mock 数据，不代表当前页面商品的真实分析。</span></div>` : ""}
       ${renderDemoSwitcher()}
-      ${renderPreferenceControls()}
-      ${collectionView ? renderCollectionRecommendationResult(collectionView, fitScore) : renderRecommendationResult(analysis, fitScore)}
-      ${USE_MOCK ? renderSimilarProducts() : ""}
 
       <section class="summary-card card accent-card">
         <div class="section-heading"><div><span class="eyebrow">一句话购买参考</span><h2>${state.mode === "trust_aware" ? "可信感知结论" : "原始评价结论"}</h2></div>${renderToggle()}</div>
@@ -515,7 +388,6 @@ function render(): void {
         <div class="metric-grid">
           ${renderMetric("原始情感", rawScore, false)}
           ${renderMetric("可信情感", trustedScore, true)}
-          ${renderMetric("按偏好推荐", fitScore.score, true)}
           <div class="confidence"><span>分析置信度</span><strong>${percent(confidence)}</strong></div>
         </div>
         <p class="fine-print">${text(collectionView?.llm_summary?.score_disclaimer ?? "分数仅反映小红书笔记与评论中的评价倾向，并非商品客观质量分。")}</p>
@@ -549,46 +421,6 @@ function renderDemoSwitcher(): string {
           <span>${escapeHtml(scenario.description)}</span>
         </button>`;
       }).join("")}
-    </div>
-  </section>`;
-}
-
-function renderPreferenceControls(): string {
-  return `<section class="card preference-card">
-    <div class="section-heading"><div><span class="eyebrow">用户关注点</span><h2>偏好权重</h2></div></div>
-    <div class="preference-controls">
-      ${(Object.keys(preferenceLabels) as PreferenceKey[]).map((key) => `<label><span>${preferenceLabels[key]}</span><input type="range" min="0" max="5" step="1" value="${state.preferences[key]}" data-preference="${key}" /><b>${state.preferences[key]}</b></label>`).join("")}
-    </div>
-  </section>`;
-}
-
-function renderRecommendationResult(analysis: ProductAnalysisData, fitScore: FitScoreResult): string {
-  return `<section class="card recommendation-card">
-    <div class="section-heading"><div><span class="eyebrow">个性化推荐结果</span><h2>${recommendationGrade(fitScore.score)}</h2></div><div class="score-orb compact"><b>${score(fitScore.score)}</b><small>/ 100</small></div></div>
-    ${fitScore.message ? `<div class="empty-state">${escapeHtml(fitScore.message)}</div>` : `<div class="recommendation-copy"><p><strong>推荐理由：</strong>${escapeHtml(recommendationReason(analysis))}</p><p><strong>注意事项：</strong>${escapeHtml(recommendationCaution(analysis))}</p></div>`}
-  </section>`;
-}
-function renderCollectionRecommendationResult(view: AnalysisViewModel, fitScore: FitScoreResult): string {
-  const reason = view.purchase_advice !== "暂无数据" ? view.purchase_advice : view.overall;
-  const cautionParts = [
-    view.weaknesses.length ? `主要顾虑：${listText(view.weaknesses)}` : "",
-    view.sample.low_confidence ? "当前样本量或置信度偏低，建议结合代表性笔记一起判断。" : "",
-  ].filter(Boolean);
-  return `<section class="card recommendation-card">
-    <div class="section-heading"><div><span class="eyebrow">个性化推荐结果</span><h2>${recommendationGrade(fitScore.score)}</h2></div><div class="score-orb compact"><b>${score(fitScore.score)}</b><small>/ 100</small></div></div>
-    ${fitScore.message ? `<div class="status-banner warning">${escapeHtml(fitScore.message)}</div>` : ""}
-    <div class="recommendation-copy"><p><strong>推荐理由：</strong>${escapeHtml(reason)}</p><p><strong>注意事项：</strong>${escapeHtml(cautionParts.join(" ") || "当前未发现明显高风险内容，仍建议查看代表性笔记原文。")}</p></div>
-  </section>`;
-}
-
-function renderSimilarProducts(): string {
-  const ranked = state.demoScenarios
-    .map((scenario) => ({ scenario, fitScore: calculateFitScore(scenario.analysis).score }))
-    .sort((a, b) => (b.fitScore ?? -1) - (a.fitScore ?? -1));
-  return `<section class="card">
-    <div class="section-heading"><div><span class="eyebrow">同类商品建议</span><h2>蓝牙耳机排序</h2></div></div>
-    <div class="recommendation-list">
-      ${ranked.map((item, index) => `<div class="recommendation-row ${item.scenario.scenario_id === state.selectedDemoScenarioId ? "current" : ""}"><span>${index + 1}</span><div><strong>${escapeHtml(item.scenario.analysis.product.canonical_name)}</strong><small>${escapeHtml(item.scenario.display_name)}${item.scenario.scenario_id === state.selectedDemoScenarioId ? " · 当前分析商品" : ""}</small></div><b>${score(item.fitScore)}</b></div>`).join("")}
     </div>
   </section>`;
 }
@@ -633,9 +465,13 @@ function renderCollectionRisk(view: AnalysisViewModel): string {
   </section>`;
 }
 
+function statementText(value: string): string {
+  return value.replace(/\s*[（(](?=[^()（）]*::)[^()（）]*[)）](?=[。！？.!]?$)/u, "");
+}
+
 function renderStatementList(values: string[], kind: "pro" | "con"): string {
   if (!values.length) return renderEmpty(kind === "pro" ? "暂无产品优点" : "暂无产品缺点");
-  return `<ol class="statement-list ${kind}">${values.map((value) => `<li>${escapeHtml(value)}</li>`).join("")}</ol>`;
+  return `<ol class="statement-list ${kind}">${values.map((value) => `<li>${escapeHtml(statementText(value))}</li>`).join("")}</ol>`;
 }
 
 function renderCompleteLlmSummary(view: AnalysisViewModel): string {
@@ -735,14 +571,6 @@ function bindEvents(): void {
   document.querySelectorAll<HTMLButtonElement>("[data-mode]").forEach((button) => {
     button.addEventListener("click", () => {
       state.mode = button.dataset.mode === "raw" ? "raw" : "trust_aware";
-      render();
-    });
-  });
-  document.querySelectorAll<HTMLInputElement>("[data-preference]").forEach((input) => {
-    input.addEventListener("input", () => {
-      const key = input.dataset.preference as PreferenceKey | undefined;
-      if (!key) return;
-      state.preferences[key] = Number(input.value);
       render();
     });
   });
@@ -1153,7 +981,6 @@ function currentCrawlRequest(): CrawlStartRequest | null {
   return {
     keyword: state.collection.keyword.trim(),
     page_product: state.pageProduct,
-    preferences: { ...state.preferences },
     config: { ...state.collection.config },
   };
 }
@@ -1499,18 +1326,62 @@ async function submitFormattedPreview(): Promise<void> {
   }
   state.collection.submitting = true;
   state.collection.submitMessage = null;
+  state.collection.crawlJob = {
+    ...state.collection.crawlJob,
+    analysis_status: "running",
+    analysis_stage: "preparing",
+    analysis_progress: 0.02,
+    analysis_message: "正在准备分析数据",
+  };
   render();
+  if (!USE_MOCK) void pollCollectionAnalysisProgress(jobId);
   try {
     const result = await crawlerClient.analyzeCollection(jobId, controller.signal);
     state.collectionResult = resultPayload(result);
     applyRecommendedAnalysisMode(state.collectionResult);
+    state.collection.crawlJob = {
+      ...state.collection.crawlJob,
+      analysis_status: "succeeded",
+      analysis_stage: "completed",
+      analysis_progress: 1,
+      analysis_message: "大模型分析已完成",
+    };
     if (currentProductKey) await saveProductResult(currentProductKey, { rawCollectionResult: state.collectionResult });
     state.collection.submitMessage = USE_MOCK ? "Mock：已完成模拟分析。" : "已完成本次采集数据的分析。";
   } catch (error: unknown) {
+    state.collection.crawlJob = {
+      ...state.collection.crawlJob,
+      analysis_status: "failed",
+      analysis_stage: "failed",
+      analysis_progress: 1,
+      analysis_message: "分析失败，请稍后重试",
+    };
     state.collection.submitMessage = collectionErrorMessage(error) || "分析请求失败，请稍后重试。";
   } finally {
     state.collection.submitting = false;
     render();
+  }
+}
+
+async function pollCollectionAnalysisProgress(jobId: string): Promise<void> {
+  try {
+    while (state.collection.submitting) {
+      await wait(600);
+      if (!state.collection.submitting) return;
+      const job = await crawlerClient.getCrawlJob(jobId, controller.signal);
+      state.collection.crawlJob = {
+        ...state.collection.crawlJob,
+        analysis_status: job.analysis_status,
+        analysis_stage: job.analysis_stage,
+        analysis_progress: job.analysis_progress,
+        analysis_message: job.analysis_message,
+      };
+      render();
+      if (job.analysis_status === "succeeded" || job.analysis_status === "failed") return;
+    }
+  } catch (error: unknown) {
+    if (error instanceof DOMException && error.name === "AbortError") return;
+    console.warn("[TrustLens] analysis progress polling failed", error);
   }
 }
 

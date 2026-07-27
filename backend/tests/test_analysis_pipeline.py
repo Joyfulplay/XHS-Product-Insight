@@ -2,10 +2,14 @@ import logging
 from pathlib import Path
 
 from app.services.analysis_pipeline import AnalysisPipelineService
+from app.services.localAnalysis import LocalAnalysisService
 
 
 class FakeInsightService:
-    def analyze_batch(self, _product_name, _notes):
+    def analyze_batch(self, _product_name, _notes, *, progress_callback=None):
+        if progress_callback is not None:
+            progress_callback("llm_stage_1", 0.15, "第一阶段")
+            progress_callback("llm_stage_2", 0.72, "第二阶段")
         return {
             "summary": {
                 "pros": [
@@ -153,8 +157,26 @@ def test_analysis_pipeline_emits_start_command_before_llm_analysis(caplog):
     assert "note_count=1" in caplog.text
 
 
+def test_analysis_pipeline_reports_both_llm_stages():
+    events = []
+    service = AnalysisPipelineService(insight_service_factory=FakeInsightService)
+
+    service.run_with_llm_response(
+        sample_dataset(),
+        progress_callback=lambda stage, progress, message: events.append(
+            (stage, progress, message)
+        ),
+    )
+
+    assert [event[0] for event in events] == [
+        "preparing",
+        "llm_stage_1",
+        "llm_stage_2",
+    ]
+
+
 def test_sentiment_distribution_rounding_does_not_exceed_one():
-    service = AnalysisPipelineService()
+    service = LocalAnalysisService()
     texts = ["good"] * 8 + ["ordinary"] * 26 + ["bad"]
 
     distribution = service._sentiment_distribution(texts)
