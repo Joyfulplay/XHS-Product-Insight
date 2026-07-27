@@ -133,16 +133,6 @@ const schema11Result = {
     comment_count: 53,
     valid_comment_count: 41,
   },
-  llm_insights: {
-    overall_summary: "正式 LLM 总结",
-    product_attributes: ["降噪", "音质"],
-    usage_scenarios: ["通勤"],
-    user_types: ["通勤用户"],
-    unsuitable_users: ["预算敏感用户"],
-    pros: ["旧版优点字段"],
-    cons: ["旧版缺点字段"],
-    purchase_advice: "适合重视降噪的用户。",
-  },
   pros: ["降噪表现稳定。", "佩戴体验舒适。", "续航满足日常使用。"],
   cons: ["产品价格较高。", "长时间佩戴可能闷热。", "部分场景证据不足。"],
   purchase_reference: {
