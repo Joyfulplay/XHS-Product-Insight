@@ -143,16 +143,6 @@ const mockCrawlerClient: CrawlerApiClient = {
       job_id: jobId,
       analysis: {
         collection: { note_count: noteCount, comment_count: commentCount, valid_comment_count: commentCount },
-        llm_insights: {
-          overall_summary: "Mock：已按保存的采集任务 ID 完成分析。",
-          product_attributes: [],
-          usage_scenarios: [],
-          user_types: [],
-          unsuitable_users: [],
-          pros: [],
-          cons: [],
-          purchase_advice: "Mock 分析仅用于验证两阶段请求流程。",
-        },
         statistics: { keywords: [], sentiment_distribution: null, risk_ratio: null },
         representative_notes: [],
         completed_at: new Date().toISOString(),

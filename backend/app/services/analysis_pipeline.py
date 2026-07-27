@@ -17,7 +17,6 @@ from app.schemas.analysis_result import (
     AnalysisCollectionSummary,
     AnalysisResult,
     KeywordItem,
-    LlmInsights,
     RepresentativeNote,
     SentimentDistribution,
     StatisticsSummary,
@@ -59,11 +58,6 @@ NEGATIVE_WORDS = {
 }
 RISK_WORDS = {"广告", "推广", "水军", "虚假", "翻车", "踩雷", "避雷", "退货", "差评"}
 STOPWORDS = {"一个", "这个", "真的", "感觉", "还是", "就是", "可以", "没有", "比较", "使用", "体验", "小红书"}
-ATTRIBUTE_HINTS = ["降噪", "音质", "续航", "舒适", "重量", "价格", "做工", "屏幕", "拍照", "性能", "散热"]
-SCENARIO_HINTS = ["通勤", "办公室", "学习", "旅行", "运动", "宿舍", "上课", "出差", "游戏"]
-USER_HINTS = ["学生", "上班族", "宝妈", "新手", "敏感肌", "预算", "女生", "男生"]
-
-
 class AnalysisPipelineService:
     """Build a stable frontend response from one completed collection dataset."""
 
@@ -78,6 +72,7 @@ class AnalysisPipelineService:
     def run(self, collection_dataset: dict[str, Any]) -> AnalysisResult:
         result, _ = self.run_with_llm_response(collection_dataset)
         return result
+
     def run_with_llm_response(
         self, collection_dataset: dict[str, Any]
     ) -> tuple[AnalysisResult, dict[str, Any] | None]:
@@ -85,14 +80,10 @@ class AnalysisPipelineService:
         cleaned_notes = self._clean_notes(notes)
 
         all_texts = self._all_texts(cleaned_notes)
-        comment_texts = [comment["text"] for note in cleaned_notes for comment in note["comments"]]
-
-        fallback_insights = self._build_rule_insights(all_texts, comment_texts)
-        llm_insights, llm_response = self._build_llm_insights(collection_dataset, cleaned_notes)
+        llm_response = self._build_llm_response(collection_dataset, cleaned_notes)
 
         final_result = AnalysisResult(
             collection=self._collection_summary(collection_dataset, cleaned_notes),
-            llm_insights=llm_insights or fallback_insights,
             statistics=self._build_statistics(all_texts),
             representative_notes=self._representative_notes(cleaned_notes),
             completed_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -147,35 +138,16 @@ class AnalysisPipelineService:
             valid_comment_count=sum(len(note["comments"]) for note in cleaned_notes),
         )
 
-    def _build_rule_insights(self, all_texts: list[str], comment_texts: list[str]) -> LlmInsights:
-        joined = " ".join(all_texts)
-        positive_examples = self._sentences_with_words(comment_texts or all_texts, POSITIVE_WORDS, limit=3)
-        negative_examples = self._sentences_with_words(comment_texts or all_texts, NEGATIVE_WORDS, limit=3)
-        attributes = [word for word in ATTRIBUTE_HINTS if word in joined]
-        scenarios = [word for word in SCENARIO_HINTS if word in joined]
-        user_types = [word for word in USER_HINTS if word in joined]
-
-        return LlmInsights(
-            overall_summary=self._summary_sentence(joined, attributes, positive_examples, negative_examples),
-            product_attributes=attributes,
-            usage_scenarios=scenarios,
-            user_types=user_types,
-            unsuitable_users=["预算有限的用户"] if "贵" in joined or "价格" in joined else [],
-            pros=positive_examples,
-            cons=negative_examples,
-            purchase_advice=self._purchase_advice(positive_examples, negative_examples),
-        )
-
-    def _build_llm_insights(
+    def _build_llm_response(
         self, dataset: dict[str, Any], cleaned_notes: list[dict[str, Any]]
-    ) -> tuple[LlmInsights | None, dict[str, Any] | None]:
+    ) -> dict[str, Any] | None:
         if not cleaned_notes:
-            return None, None
+            return None
 
         try:
             insight_service = self._get_insight_service()
         except Exception:
-            return None, None
+            return None
 
         raw_input = dataset.get("input") if isinstance(dataset.get("input"), dict) else {}
         product_name = str(raw_input.get("query") or raw_input.get("product_name") or "目标产品") # type: ignore
@@ -194,25 +166,13 @@ class AnalysisPipelineService:
                 **batch_result,
                 "summary": summary.model_dump(mode="json"),
             }
-            return self._frontend_insights_from_summary(summary), validated_batch_result
+            return validated_batch_result
         except Exception:
             logger.exception(
                 "[LLM_ANALYSIS_FAILED] 大模型分析或汇总结果校验失败：product=%s",
                 product_name,
             )
-            return None, None
-
-    @staticmethod
-    def _frontend_insights_from_summary(summary: XiaohongshuSummaryOutput) -> LlmInsights:
-        """Adapt the validated LLM summary to the current frontend contract."""
-
-        return LlmInsights(
-            overall_summary=summary.purchase_reference.trust_aware_one_liner,
-            product_attributes=[aspect.name for aspect in summary.aspects],
-            pros=summary.pros,
-            cons=summary.cons,
-            purchase_advice=summary.purchase_reference.trust_aware_one_liner,
-        )
+            return None
 
     def _get_insight_service(self) -> XiaohongshuInsightService:
         if self.insight_service_factory is not None:
@@ -299,36 +259,6 @@ class AnalysisPipelineService:
                 for comment in note["comments"]
             )
         return texts
-
-    def _sentences_with_words(self, texts: list[str], words: set[str], limit: int) -> list[str]:
-        result: list[str] = []
-        for text in texts:
-            if any(word in text for word in words):
-                result.append(self._trim(text, 36))
-            if len(result) >= limit:
-                break
-        return result
-
-    def _summary_sentence(self, joined: str, attributes: list[str], pros: list[str], cons: list[str]) -> str | None:
-        if not joined:
-            return None
-        focus = "、".join(attributes[:4]) if attributes else "整体体验"
-        if pros and cons:
-            return f"用户主要讨论{focus}，正向反馈和负向顾虑同时存在。"
-        if pros:
-            return f"用户主要讨论{focus}，整体反馈偏正向。"
-        if cons:
-            return f"用户主要讨论{focus}，需要重点关注负向反馈。"
-        return f"用户主要讨论{focus}，当前样本情绪倾向不明显。"
-
-    def _purchase_advice(self, pros: list[str], cons: list[str]) -> str | None:
-        if pros and not cons:
-            return "当前样本反馈偏正向，可结合价格和个人需求进一步判断。"
-        if cons and not pros:
-            return "当前样本存在较多顾虑，建议查看代表性笔记后再决定。"
-        if pros and cons:
-            return "适合重视优点且能接受主要缺点的用户，建议重点对照代表性笔记。"
-        return None
 
     def _note_score(self, note: dict[str, Any]) -> int:
         return note["likes"] * 2 + note["comments_count"] + len(note["title"]) + min(len(note["text"]), 200)

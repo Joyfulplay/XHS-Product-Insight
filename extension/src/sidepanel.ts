@@ -323,25 +323,6 @@ function evidenceIdText(values: string[]): string {
   return values.length ? values.join("、") : "暂无";
 }
 
-function sentimentText(distribution: { positive: number | null; neutral: number | null; negative: number | null } | null): string {
-  if (!distribution) return "暂无数据";
-  return `正面 ${percent(distribution.positive)} / 中性 ${percent(distribution.neutral)} / 负面 ${percent(distribution.negative)}`;
-}
-
-function analysisSourceText(source: string | null): string {
-  if (!source) return "分析来源：暂无数据";
-  const normalized = source.toLowerCase();
-  if (normalized.includes("llm") || normalized.includes("openai") || normalized.includes("model")) return "分析来源：正式 LLM";
-  if (normalized.includes("rule") || normalized.includes("fallback")) return "分析来源：规则回退";
-  if (normalized.includes("unavailable") || normalized.includes("disabled")) return "分析来源：暂不可用";
-  return `分析来源：${source}`;
-}
-
-function attributeText(item: { name: string; positive_mentions: number | null; negative_mentions: number | null }): string {
-  if (item.positive_mentions === null && item.negative_mentions === null) return escapeHtml(item.name);
-  return `${escapeHtml(item.name)}：${item.positive_mentions ?? 0} 条正面提及，${item.negative_mentions ?? 0} 条负面提及`;
-}
-
 function resultPayload(result: unknown): unknown {
   if (!result || typeof result !== "object") return result;
   const record = result as { analysis?: unknown; data?: unknown; result?: unknown; raw?: unknown };
@@ -540,7 +521,6 @@ function render(): void {
         <p class="fine-print">${text(collectionView?.llm_summary?.score_disclaimer ?? "分数仅反映小红书笔记与评论中的评价倾向，并非商品客观质量分。")}</p>
       </section>
 
-      ${renderXhsAnalysisOverview(state.collectionResult ?? analysis)}
       ${collectionView ? renderCompleteLlmSummary(collectionView) : ""}
 
       <section class="card">
@@ -650,31 +630,6 @@ function renderCollectionRisk(view: AnalysisViewModel): string {
     <div class="section-heading"><div><span class="eyebrow">内容可信风险</span><h2>风险说明</h2></div><div class="risk-total"><b>${riskCount}</b><small>条 · ${percent(view.sample.risk_negative_ratio)}</small></div></div>
     ${view.risk_reasons.length ? `<div class="risk-reasons">${view.risk_reasons.map((reason) => `<div><span>${escapeHtml(reason.reason_label)}</span><b>${reason.count}</b></div>`).join("")}</div>` : `<p class="zero-risk">当前样本中未识别到高风险内容。</p>`}
     <div class="risk-note"><span>i</span><p>${text(view.risk_caution ?? "风险/负面占比来自后端统计结果，仅提示内容需要谨慎参考，不代表评论一定虚假。")}</p></div>
-  </section>`;
-}
-
-function renderXhsAnalysisOverview(analysis: ProductAnalysisData | unknown): string {
-  const view = normalizeAnalysisResult(analysis);
-  return `<section class="card xhs-result-card">
-    <div class="section-heading"><div><span class="eyebrow">小红书评论分析</span><h2>分析结果</h2></div><small>${escapeHtml(analysisSourceText(view.sample.analysis_source))}</small></div>
-    ${view.empty_message ? `<div class="status-banner warning">${escapeHtml(view.empty_message)}</div>` : ""}
-    ${view.sample.low_confidence ? `<div class="status-banner warning">当前样本量或置信度偏低，购买建议仅作初步参考。</div>` : ""}
-    <div class="xhs-stat-grid">
-      <div><span>采集笔记数</span><strong>${view.sample.note_count.toLocaleString("zh-CN")}</strong></div>
-      <div><span>原始评论数</span><strong>${countText(view.sample.raw_comment_count)}</strong></div>
-      <div><span>清洗后有效评论数</span><strong>${countText(view.sample.valid_comment_count)}</strong></div>
-      <div><span>风险/负面占比</span><strong>${percent(view.sample.risk_negative_ratio)}</strong></div>
-    </div>
-    <div class="xhs-insight-list">
-      <p><strong>情感分布：</strong>${escapeHtml(sentimentText(view.sample.sentiment_distribution))}</p>
-      <p><strong>总体评价：</strong>${escapeHtml(view.overall)}</p>
-      <p><strong>产品属性：</strong>${view.attributes.length ? view.attributes.map(attributeText).join("；") : "暂无数据"}</p>
-      <p><strong>使用场景：</strong>${escapeHtml(listText(view.scenes))}</p>
-      <p><strong>用户类型：</strong>${escapeHtml(listText(view.suitable_users))}</p>
-      <p><strong>不适用人群：</strong>${escapeHtml(listText(view.unsuitable_users))}</p>
-      <p><strong>购买建议：</strong>${escapeHtml(view.purchase_advice)}</p>
-      <p><strong>高频关键词：</strong>${escapeHtml(view.keywords.length ? view.keywords.join(" / ") : "暂无数据")}</p>
-    </div>
   </section>`;
 }
 

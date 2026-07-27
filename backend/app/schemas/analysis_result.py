@@ -17,17 +17,6 @@ class AnalysisCollectionSummary(AnalysisOutputModel):
     valid_comment_count: int = Field(default=0, ge=0)
 
 
-class LlmInsights(AnalysisOutputModel):
-    overall_summary: str | None = None
-    product_attributes: list[str] = Field(default_factory=list)
-    usage_scenarios: list[str] = Field(default_factory=list)
-    user_types: list[str] = Field(default_factory=list)
-    unsuitable_users: list[str] = Field(default_factory=list)
-    pros: list[str] = Field(default_factory=list)
-    cons: list[str] = Field(default_factory=list)
-    purchase_advice: str | None = None
-
-
 class KeywordItem(AnalysisOutputModel):
     text: str = Field(min_length=1)
     count: int = Field(ge=0)
@@ -63,7 +52,6 @@ class RepresentativeNote(AnalysisOutputModel):
 class AnalysisResult(AnalysisOutputModel):
     schema_version: Literal["1.1"] = "1.1"
     collection: AnalysisCollectionSummary = Field(default_factory=AnalysisCollectionSummary)
-    llm_insights: LlmInsights = Field(default_factory=LlmInsights)
     statistics: StatisticsSummary = Field(default_factory=StatisticsSummary)
     representative_notes: list[RepresentativeNote] = Field(default_factory=list)
     completed_at: str | None = None

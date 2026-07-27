@@ -267,7 +267,8 @@ def test_collection_only_persists_data_until_analysis_is_requested(tmp_path):
     analysis_result = service.analyze_collection(job_id)
 
     assert analysis_result["job_id"] == job_id
-    assert "llm_insights" in analysis_result
+    assert "llm_insights" not in analysis_result
+    assert "statistics" in analysis_result
     assert (tmp_path / "result" / f"{job_id}.json").is_file()
     assert pipeline.calls == 1
 
@@ -292,7 +293,8 @@ def test_saved_collection_id_can_be_analyzed_after_service_restart(tmp_path):
     result = restarted_service.analyze_collection(job_id)
 
     assert result["job_id"] == job_id
-    assert "llm_insights" in result
+    assert "llm_insights" not in result
+    assert "statistics" in result
 
 
 def test_collection_keeps_full_note_link_only_in_memory(tmp_path):
@@ -531,4 +533,5 @@ def test_collection_endpoints_return_a_finished_desensitized_job(monkeypatch):
 
     assert analysis.status_code == 200
     assert analysis.json()["job_id"] == job_id
-    assert "llm_insights" in analysis.json()
+    assert "llm_insights" not in analysis.json()
+    assert "statistics" in analysis.json()
