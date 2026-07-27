@@ -381,6 +381,8 @@ export interface AnalysisViewModel {
     valid_comment_count: number | null;
     risk_negative_ratio: number | null;
     sentiment_distribution: { positive: number | null; neutral: number | null; negative: number | null } | null;
+    raw_sentiment_score: number | null;
+    trust_aware_sentiment_score: number | null;
     analysis_source: string | null;
     confidence: number | null;
     low_confidence: boolean;
@@ -394,7 +396,9 @@ export interface AnalysisViewModel {
   unsuitable_users: string[];
   purchase_advice: string;
   keywords: string[];
+  high_risk_count: number | null;
   risk_reasons: RiskReason[];
+  risk_caution: string | null;
   evidence: AnalysisEvidenceViewModel[];
   empty_message: string | null;
 }

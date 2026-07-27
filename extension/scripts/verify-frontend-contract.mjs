@@ -1,8 +1,9 @@
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
-const root = resolve(import.meta.dirname, "..");
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const files = [
   "src/api/crawler_client.ts",
   "src/api/paths.ts",
@@ -23,6 +24,7 @@ const requiredCrawlerMethods = [
   "startCollection",
   "getCollectionJob",
   "getCollectionResult",
+  "analyzeCollection",
 ];
 
 for (const method of requiredCrawlerMethods) {
@@ -141,6 +143,18 @@ const schema11Result = {
     cons: ["价格较高"],
     purchase_advice: "适合重视降噪的用户。",
   },
+  sentiment_scores: {
+    raw: 82,
+    trust_aware: 76,
+    analysis_confidence: 88,
+    score_disclaimer: "分数反映评价情感倾向，不是商品客观质量分。",
+  },
+  risk_overview: {
+    high_risk_content_count: 3,
+    high_risk_content_ratio: 0.3,
+    reason_distribution: [{ reason: "营销式表达", count: 3 }],
+    caution: "风险分数表示内容需要谨慎参考，不代表评论一定虚假。",
+  },
   statistics: {
     keywords: [{ text: "降噪", count: 12, weight: 1 }],
     sentiment_distribution: { positive: 0.6, neutral: 0.3, negative: 0.1 },
@@ -165,8 +179,20 @@ if (schema11Result.notes.length !== 10) {
 if (normalizedSchema11.sample.valid_comment_count !== 41) {
   throw new Error(`schema 1.1 valid_comment_count mapping failed: expected 41, got ${normalizedSchema11.sample.valid_comment_count}`);
 }
-if (normalizedSchema11.sample.risk_negative_ratio !== 0.2) {
-  throw new Error(`schema 1.1 risk_ratio mapping failed: expected 0.2, got ${normalizedSchema11.sample.risk_negative_ratio}`);
+if (normalizedSchema11.sample.risk_negative_ratio !== 0.3) {
+  throw new Error(`schema 1.1 LLM risk ratio mapping failed: expected 0.3, got ${normalizedSchema11.sample.risk_negative_ratio}`);
+}
+if (normalizedSchema11.sample.raw_sentiment_score !== 82 || normalizedSchema11.sample.trust_aware_sentiment_score !== 76) {
+  throw new Error("schema 1.1 LLM sentiment score mapping failed");
+}
+if (normalizedSchema11.sample.confidence !== 0.88) {
+  throw new Error(`schema 1.1 LLM confidence mapping failed: expected 0.88, got ${normalizedSchema11.sample.confidence}`);
+}
+if (normalizedSchema11.high_risk_count !== 3 || normalizedSchema11.risk_reasons[0]?.reason_label !== "营销式表达") {
+  throw new Error("schema 1.1 LLM risk overview mapping failed");
+}
+if (normalizedSchema11.risk_caution !== "风险分数表示内容需要谨慎参考，不代表评论一定虚假。") {
+  throw new Error("schema 1.1 LLM risk caution mapping failed");
 }
 if (normalizedSchema11.keywords[0] !== "降噪") {
   throw new Error("schema 1.1 statistics.keywords mapping failed");

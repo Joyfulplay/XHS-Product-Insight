@@ -27,6 +27,7 @@ export interface CrawlerApiClient {
   startCollection(source: PageProduct, queryOverride?: string, config?: CrawlConfig, signal?: AbortSignal): Promise<CollectionStartResponse>;
   getCollectionJob(jobId: string, signal?: AbortSignal): Promise<CollectionJobResponse>;
   getCollectionResult(jobId: string, signal?: AbortSignal): Promise<CollectionResultResponse>;
+  analyzeCollection(jobId: string, signal?: AbortSignal): Promise<CollectionResultResponse>;
   startCrawl(request: CrawlStartRequest, signal?: AbortSignal): Promise<CrawlJobData>;
   getCrawlJob(jobId: string, signal?: AbortSignal): Promise<CrawlJobData>;
   cancelCrawl(jobId: string, signal?: AbortSignal): Promise<CrawlJobData>;
@@ -133,6 +134,32 @@ const mockCrawlerClient: CrawlerApiClient = {
     return { job_id: jobId, formatted_preview: previewFrom(lastRequest, job), analysis: null };
   },
 
+  async analyzeCollection(jobId: string, signal?: AbortSignal): Promise<CollectionResultResponse> {
+    await delay(350, signal);
+    if (!lastRequest) throw new Error("No mock collection request");
+    const noteCount = lastRequest.config.max_notes;
+    const commentCount = noteCount * lastRequest.config.max_comments_per_note;
+    return {
+      job_id: jobId,
+      analysis: {
+        collection: { note_count: noteCount, comment_count: commentCount, valid_comment_count: commentCount },
+        llm_insights: {
+          overall_summary: "Mock：已按保存的采集任务 ID 完成分析。",
+          product_attributes: [],
+          usage_scenarios: [],
+          user_types: [],
+          unsuitable_users: [],
+          pros: [],
+          cons: [],
+          purchase_advice: "Mock 分析仅用于验证两阶段请求流程。",
+        },
+        statistics: { keywords: [], sentiment_distribution: null, risk_ratio: null },
+        representative_notes: [],
+        completed_at: new Date().toISOString(),
+      },
+    };
+  },
+
   async startCrawl(request: CrawlStartRequest, signal?: AbortSignal): Promise<CrawlJobData> {
     await delay(260, signal);
     mockCrawlPollCount = 0;
@@ -179,20 +206,8 @@ const mockCrawlerClient: CrawlerApiClient = {
         error_message: "Mock 任务超时：后端长时间未返回新进度",
       };
     }
-    if (mockCrawlPollCount >= 7) {
+    if (mockCrawlPollCount >= 4) {
       return { job_id: jobId, status: "completed", stage: "completed", progress: 1, collected_notes: maxNotes, collected_comments: maxComments, error_message: null };
-    }
-    if (mockCrawlPollCount === 6) {
-      return { job_id: jobId, status: "formatting", stage: "formatting_dataset", progress: 0.92, collected_notes: maxNotes, collected_comments: Math.round(maxComments * 0.96), error_message: null };
-    }
-    if (mockCrawlPollCount === 5) {
-      return { job_id: jobId, status: "analyzing", stage: "statistical_analysis", progress: 0.82, collected_notes: maxNotes, collected_comments: Math.round(maxComments * 0.92), error_message: null };
-    }
-    if (mockCrawlPollCount === 4) {
-      return { job_id: jobId, status: "llm_extracting", stage: "llm_extracting", progress: 0.68, collected_notes: maxNotes, collected_comments: Math.round(maxComments * 0.86), error_message: null };
-    }
-    if (mockCrawlPollCount === 3) {
-      return { job_id: jobId, status: "cleaning", stage: "cleaning_data", progress: 0.54, collected_notes: maxNotes, collected_comments: Math.round(maxComments * 0.74), error_message: null };
     }
     const ratio = Math.min(0.75, 0.18 + mockCrawlPollCount * 0.18);
     return {
@@ -268,6 +283,10 @@ const realCrawlerClient: CrawlerApiClient = {
 
   getCollectionResult(jobId: string, signal?: AbortSignal): Promise<CollectionResultResponse> {
     return requestJson(apiPaths.crawler.collectionResult(jobId), {}, signal);
+  },
+
+  analyzeCollection(jobId: string, signal?: AbortSignal): Promise<CollectionResultResponse> {
+    return requestJson(apiPaths.crawler.collectionAnalysis(jobId), { method: "POST" }, signal);
   },
 
   async startCrawl(request: CrawlStartRequest, signal?: AbortSignal): Promise<CrawlJobData> {
