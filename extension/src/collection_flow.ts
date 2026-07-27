@@ -7,8 +7,6 @@ import type {
   XiaohongshuLoginState,
 } from "./api/types";
 
-export type PreferenceWeightsForCollection = Record<string, number>;
-
 export interface CollectionFlowState {
   service: CrawlerServiceState;
   login: XiaohongshuLoginState;
@@ -153,22 +151,43 @@ function renderCrawlStatus(state: CollectionFlowState, isRunning: boolean): stri
   </div>`;
 }
 
-function preferencePreview(preferences: PreferenceWeightsForCollection): string {
-  return Object.entries(preferences)
-    .filter(([, value]) => value > 0)
-    .map(([key, value]) => `${key}:${value}`)
-    .join(" / ");
+const analysisStageLabels: Record<string, { title: string; detail: string }> = {
+  preparing: { title: "正在准备分析数据", detail: "清洗并整理本次采集的笔记与评论" },
+  llm_stage_1: { title: "大模型第一阶段分析中", detail: "逐篇分析笔记、图片、评论与证据" },
+  llm_stage_2: { title: "大模型第二阶段分析中", detail: "汇总产品优缺点、评分与购买结论" },
+  formatting: { title: "正在整理分析结果", detail: "校验模型输出并生成前端展示数据" },
+  completed: { title: "大模型分析完成", detail: "两阶段分析结果已生成" },
+  failed: { title: "大模型分析失败", detail: "请稍后重新提交分析" },
+};
+
+function renderAnalysisProgress(state: CollectionFlowState): string {
+  const status = state.crawlJob.analysis_status;
+  if (!status || status === "idle") return "";
+  const stage = state.crawlJob.analysis_stage ?? (status === "succeeded" ? "completed" : status);
+  const copy = analysisStageLabels[stage] ?? {
+    title: state.crawlJob.analysis_message ?? "正在进行大模型分析",
+    detail: "请保持扩展面板开启",
+  };
+  const progress = Math.round(Math.max(0, Math.min(1, state.crawlJob.analysis_progress ?? 0)) * 100);
+  const className = status === "succeeded" ? "success" : status === "failed" ? "failed" : "running";
+  return `<div class="analysis-progress ${className}">
+    <div class="analysis-progress-heading">
+      ${status === "running" ? `<span class="crawl-spinner" aria-hidden="true"></span>` : ""}
+      <div><strong>${escapeHtml(copy.title)}</strong><small>${escapeHtml(state.crawlJob.analysis_message ?? copy.detail)}</small></div>
+      <b>${progress}%</b>
+    </div>
+    <div class="analysis-progress-bar"><i style="width:${progress}%"></i></div>
+  </div>`;
 }
 
 export function renderCollectionFlow(
   state: CollectionFlowState,
   product: PageProduct,
-  preferences: PreferenceWeightsForCollection,
   useMock: boolean,
 ): string {
   const validation = validateCrawlReady(state);
   const runningStatuses = ["queued", "running", "crawling"];
-  const canStart = !validation && !runningStatuses.includes(state.crawlJob.status);
+  const canStart = !validation && !state.submitting && !runningStatuses.includes(state.crawlJob.status);
   const isRunning = runningStatuses.includes(state.crawlJob.status);
   const startLabel = state.starting ? (["failed", "timeout"].includes(state.crawlJob.status) ? "正在重试..." : "正在创建...") : "开始采集";
   const retryLabel = state.starting ? "正在重试..." : "重试";
@@ -229,11 +248,11 @@ export function renderCollectionFlow(
         <div><dt>采集任务 ID</dt><dd>${escapeHtml(state.crawlJob.job_id ?? "暂无")}</dd></div>
         <div><dt>商品信息</dt><dd>${escapeHtml(productName)}</dd></div>
         <div><dt>搜索关键词</dt><dd>${escapeHtml(state.formattedPreview.keyword)}</dd></div>
-        <div><dt>用户偏好</dt><dd>${escapeHtml(preferencePreview(preferences) || "未设置")}</dd></div>
         <div><dt>笔记数量</dt><dd>${state.formattedPreview.note_count}</dd></div>
         <div><dt>评论数量</dt><dd>${state.formattedPreview.comment_count}</dd></div>
       </dl>
       <button class="primary-button inline" id="submit-analysis-button" ${state.submitting ? "disabled" : ""}>${state.submitting ? "正在分析..." : (useMock ? "模拟分析采集结果" : "分析本次采集结果")}</button>
+      ${renderAnalysisProgress(state)}
       ${state.submitMessage ? `<p class="field-hint strong">${escapeHtml(state.submitMessage)}</p>` : ""}
     </div>` : ""}
   </section>`;

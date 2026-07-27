@@ -9,10 +9,9 @@ from __future__ import annotations
 import json
 import os
 import time
-from concurrent.futures import ThreadPoolExecutor
-from functools import partial
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from app.LLM.client import LLMClient
 from app.LLM.prompt.prompt import (
@@ -60,6 +59,9 @@ def load_cleaned_dataset(path: str | Path) -> list[dict[str, Any]]:
         else:
             records.append(record)
     return records
+
+
+AnalysisProgressCallback = Callable[[str, float, str], None]
 
 
 class XiaohongshuInsightService:
@@ -199,15 +201,44 @@ class XiaohongshuInsightService:
         )
         return list(dict.fromkeys(candidates))
 
-    def analyze_batch(self, product_name: str, posts: list[dict[str, Any]]) -> dict[str, Any]:
+    def analyze_batch(
+        self,
+        product_name: str,
+        posts: list[dict[str, Any]],
+        *,
+        progress_callback: AnalysisProgressCallback | None = None,
+    ) -> dict[str, Any]:
+        if progress_callback is not None:
+            progress_callback(
+                "llm_stage_1",
+                0.15,
+                f"第一阶段：正在逐篇分析 {len(posts)} 篇笔记",
+            )
         stage_one_started_at = time.perf_counter()
         worker_count = min(self.max_workers, len(posts)) if posts else 1
         with ThreadPoolExecutor(
             max_workers=worker_count,
             thread_name_prefix="llm-post",
         ) as executor:
-            analyze_post = partial(self.analyze_post, product_name)
-            post_analyses = list(executor.map(analyze_post, posts))
+            future_indexes = {
+                executor.submit(self.analyze_post, product_name, post): index
+                for index, post in enumerate(posts)
+            }
+            ordered_analyses: list[dict[str, Any] | None] = [None] * len(posts)
+            for completed_count, future in enumerate(
+                as_completed(future_indexes),
+                start=1,
+            ):
+                ordered_analyses[future_indexes[future]] = future.result()
+                if progress_callback is not None:
+                    progress_callback(
+                        "llm_stage_1",
+                        0.15 + 0.5 * completed_count / max(1, len(posts)),
+                        f"第一阶段：已分析 {completed_count}/{len(posts)} 篇笔记",
+                    )
+        post_analyses = [
+            analysis for analysis in ordered_analyses if analysis is not None
+        ]
         post_analyses = [
             self._globalize_post_evidence_ids(analysis, post_number)
             for post_number, analysis in enumerate(post_analyses, start=1)
@@ -221,6 +252,12 @@ class XiaohongshuInsightService:
             flush=True,
         )
         print("[LLM_STAGE_2_STARTED] 第二阶段聚合分析已开始", flush=True)
+        if progress_callback is not None:
+            progress_callback(
+                "llm_stage_2",
+                0.72,
+                "第二阶段：正在汇总产品优缺点、评分与购买结论",
+            )
         summary = self.llm.analyze_json(
             system_prompt=SUMMARY_SYSTEM_PROMPT,
             text=build_summary_prompt(product_name, post_analyses, evidence_catalog),

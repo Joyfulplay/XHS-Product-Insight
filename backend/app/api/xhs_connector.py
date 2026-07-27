@@ -23,7 +23,7 @@ from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field, field_validator
 
-from app.data.crawlers.xhs_client import (
+from app.crawlers.xhs_client import (
     AuthRequiredError,
     PRIVATE_NOTE_OPEN_URL_FIELD,
     XiaohongshuScraper,
@@ -215,6 +215,10 @@ class JobResponse(BaseModel):
     created_at: str
     updated_at: str
     error: ErrorDetail | None = None
+    analysis_status: Literal["idle", "running", "succeeded", "failed"] = "idle"
+    analysis_stage: str = "waiting"
+    analysis_progress: float = Field(default=0, ge=0, le=1)
+    analysis_message: str | None = None
 
 
 class AuthStatusResponse(BaseModel):
@@ -255,6 +259,10 @@ class JobStore:
             "updated_at": timestamp,
             "error": None,
             "result": None,
+            "analysis_status": "idle",
+            "analysis_stage": "waiting",
+            "analysis_progress": 0.0,
+            "analysis_message": None,
         }
         with self._lock:
             self._jobs[job["job_id"]] = job
@@ -294,9 +302,10 @@ class XhsConnectorService:
         self.jobs = job_store or JobStore()
         self.executor = executor or ThreadPoolExecutor(max_workers=2, thread_name_prefix="xhs-job")
         self.analysis_pipeline = AnalysisPipelineService()
-        self.raw_persistence = PersistenceService(PROJECT_ROOT / "data/raw")
-        self.persistence = PersistenceService(PROJECT_ROOT / "data/processed")
-        self.result_persistence = PersistenceService(PROJECT_ROOT / "data/result")
+        runtime_collection_dir = PROJECT_ROOT / ".runtime/collections"
+        self.raw_persistence = PersistenceService(runtime_collection_dir / "raw")
+        self.persistence = PersistenceService(runtime_collection_dir / "processed")
+        self.result_persistence = PersistenceService(runtime_collection_dir / "result")
         self._futures: dict[str, Future[Any]] = {}
         self._auth_cache: dict[str, Any] | None = None
         self._auth_cache_at = 0.0
@@ -409,6 +418,8 @@ class XhsConnectorService:
             raise RuntimeError("采集任务尚未完成")
         if job is not None and job.get("analysis_result") is not None:
             return job["analysis_result"]
+        if job is not None and job.get("analysis_status") == "running":
+            raise RuntimeError("分析任务正在运行")
 
         dataset = self.persistence.load(job_id)
         if dataset is None:
@@ -416,19 +427,65 @@ class XhsConnectorService:
                 raise KeyError(job_id)
             raise RuntimeError("找不到该采集任务对应的数据文件")
         dataset["task_id"] = job_id
-        analysis, llm_response = self.analysis_pipeline.run_with_llm_response(dataset)
-        analysis_result = analysis.model_dump(mode="json")
-        analysis_result.update(frontend_llm_summary_fields(llm_response))
-        links = self._note_open_links.get(job_id, {})
-        self._attach_note_open_urls(analysis_result, job_id, {key: value[0] for key, value in links.items()}, datetime.now(timezone.utc))
-        result = {**analysis_result, "job_id": job_id}
-        result_storage_path = self.result_persistence.save(
-            job_id,
-            {"job_id": job_id, "llm_response": llm_response, "analysis": result},
-        )
-        result["storage"] = {"result_path": result_storage_path}
         if job is not None:
-            self.jobs.update(job_id, analysis_result=result)
+            self.jobs.update(
+                job_id,
+                analysis_status="running",
+                analysis_stage="preparing",
+                analysis_progress=0.02,
+                analysis_message="正在准备分析数据",
+            )
+
+        def update_analysis_progress(stage: str, progress: float, message: str) -> None:
+            if self.jobs.get(job_id) is not None:
+                self.jobs.update(
+                    job_id,
+                    analysis_status="running",
+                    analysis_stage=stage,
+                    analysis_progress=progress,
+                    analysis_message=message,
+                )
+
+        try:
+            analysis, llm_response = self.analysis_pipeline.run_with_llm_response(
+                dataset,
+                progress_callback=update_analysis_progress,
+            )
+            update_analysis_progress("formatting", 0.92, "正在校验并整理分析结果")
+            analysis_result = analysis.model_dump(mode="json")
+            analysis_result.update(frontend_llm_summary_fields(llm_response))
+            links = self._note_open_links.get(job_id, {})
+            self._attach_note_open_urls(
+                analysis_result,
+                job_id,
+                {key: value[0] for key, value in links.items()},
+                datetime.now(timezone.utc),
+            )
+            result = {**analysis_result, "job_id": job_id}
+            result_storage_path = self.result_persistence.save(
+                job_id,
+                {"job_id": job_id, "llm_response": llm_response, "analysis": result},
+            )
+            result["storage"] = {"result_path": result_storage_path}
+        except Exception:
+            if self.jobs.get(job_id) is not None:
+                self.jobs.update(
+                    job_id,
+                    analysis_status="failed",
+                    analysis_stage="failed",
+                    analysis_progress=1.0,
+                    analysis_message="分析失败，请稍后重试",
+                )
+            raise
+        if job is not None:
+            self.jobs.update(
+                job_id,
+                analysis_result=result,
+                analysis_status="succeeded",
+                analysis_stage="completed",
+                analysis_progress=1.0,
+                analysis_message="大模型分析已完成",
+            )
         return result
 
     @staticmethod

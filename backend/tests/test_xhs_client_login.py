@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.data.crawlers.xhs_client import (
+from app.crawlers.xhs_client import (
     ApiRequestError,
     AuthRequiredError,
     BrowserNotFoundError,

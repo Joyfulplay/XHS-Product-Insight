@@ -9,7 +9,8 @@
 关键词和小红书链接不会启动浏览器。只有输入淘宝/天猫链接且没有使用
 ``--query`` 指定搜索词时，才会临时启动 Playwright 读取商品标题。
 
-首次使用前运行 ``python xhs_client.py --login``，通过系统 Edge/Chrome 扫码登录。
+首次使用前运行 ``python backend/app/crawlers/xhs_client.py --login``，
+通过系统 Edge/Chrome 扫码登录。
 脚本只访问当前登录账号正常可见的公开内容，不尝试绕过验证码或平台限制。
 """
 
@@ -485,7 +486,7 @@ class XiaohongshuScraper:
             from xhs_cli.cookies import get_cookie_path, save_cookies
         except ImportError as exc:
             raise ScraperError(
-                "缺少 Playwright 或 xiaohongshu-cli，请先安装爬虫 requirements.txt"
+                "缺少 Playwright 或 xiaohongshu-cli，请先安装项目根目录 requirements.txt"
             ) from exc
 
         temporary_profile = self.profile_dir / f"forced-login-{uuid4().hex}" if force else None

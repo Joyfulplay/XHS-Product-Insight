@@ -70,9 +70,9 @@ Xiaohongshu is the only source of review-analysis data. The planned collection d
 
 | Component | Responsibility |
 |---|---|
-| Browser extension | Recognize products, accept user settings, start tasks, show progress, and display results |
+| Browser extension | Recognize products, start tasks, show progress, and display results |
 | Local crawler connector | Handle Xiaohongshu login, collect notes and comments, manage asynchronous tasks, and return desensitized structured data |
-| Analysis backend | Clean data, calculate statistics, optionally invoke the LLM, apply preference-based scoring, and generate product insights |
+| Analysis backend | Clean data, calculate statistics, invoke the LLM, and generate product insights |
 
 The current integration uses the collection API as the end-to-end contract. After a collection job succeeds, `/api/v1/xhs/collections/{job_id}/result` returns the collected Xiaohongshu content together with normalized analysis fields for the browser extension. A separate `/analysis` job API has not been added.
 
@@ -87,10 +87,9 @@ The extension is currently designed for Taobao and Tmall product pages. Its resp
 - configuring collection limits;
 - checking the local service status;
 - starting login and collection tasks;
-- polling asynchronous task progress;
+- polling collection progress and the two-stage LLM analysis status;
 - previewing structured collection data;
-- displaying Xiaohongshu-only analysis results;
-- applying user preference weights to scoring and ranking.
+- displaying Xiaohongshu-only analysis results.
 
 The extension remains lightweight: it does not perform the crawler's login process, store authentication credentials, or run the complete LLM analysis pipeline itself.
 
@@ -114,6 +113,7 @@ http://127.0.0.1:8000
 ```
 
 Login and collection may take time, so both operations should run as asynchronous jobs. The connector should return a `job_id`, and the extension should poll for status instead of keeping one HTTP request open.
+While analysis is running, the same collection job exposes `analysis_status`, `analysis_stage`, `analysis_progress`, and `analysis_message`, allowing the extension to display preparation, per-post LLM analysis, aggregate LLM analysis, and result-formatting progress.
 
 The current interface contract is:
 
@@ -123,12 +123,15 @@ The current interface contract is:
 | `GET` | `/api/v1/xhs/auth/login/{job_id}` | Query the login task |
 | `GET` | `/api/v1/xhs/auth/status` | Query the current login status |
 | `POST` | `/api/v1/xhs/collections` | Start a collection task |
-| `GET` | `/api/v1/xhs/collections/{job_id}` | Query collection progress |
-| `GET` | `/api/v1/xhs/collections/{job_id}/result` | Retrieve the desensitized collection result and analysis fields |
+| `GET` | `/api/v1/xhs/collections/{job_id}` | Query collection and two-stage analysis progress |
+| `GET` | `/api/v1/xhs/collections/{job_id}/result` | Retrieve the desensitized collection result |
+| `POST` | `/api/v1/xhs/collections/{job_id}/analysis` | Analyze the saved collection and return the LLM result |
 
 ### Run the Local Backend
 
 The local FastAPI service provides the extension-facing API, Xiaohongshu collection connector, persistence, and analysis pipeline.
+See [USAGE.md](USAGE.md) for virtual-environment setup, direct
+`backend/main.py` startup commands, Xiaohongshu login, and standalone crawler usage.
 
 For Windows users, the easiest way is to double-click:
 
@@ -240,10 +243,11 @@ The confirmed project structure includes:
 
 ```text
 XHS-Product-Insight/
+├── USAGE.md
 ├── backend/
 │   ├── app/
 │   │   ├── api/
-│   │   ├── data/crawlers/
+│   │   ├── crawlers/
 │   │   ├── LLM/
 │   │   ├── preprocess/
 │   │   ├── schemas/

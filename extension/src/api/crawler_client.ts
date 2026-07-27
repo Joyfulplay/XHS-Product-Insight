@@ -43,7 +43,6 @@ function previewFrom(request: CrawlStartRequest, job: CrawlJobData): FormattedCr
   return {
     product: request.page_product,
     keyword: request.keyword,
-    preferences: request.preferences,
     note_count: job.collected_notes,
     comment_count: job.collected_comments,
     generated_at: new Date().toISOString(),
@@ -69,6 +68,10 @@ function crawlJobFromCollection(job: CollectionStartResponse | CollectionJobResp
     collected_comments: "collected_comments" in job ? (job.collected_comments ?? 0) : 0,
     error_message: errorMessage ?? job.message ?? null,
     message: job.message ?? null,
+    analysis_status: job.analysis_status,
+    analysis_stage: job.analysis_stage,
+    analysis_progress: job.analysis_progress ?? undefined,
+    analysis_message: job.analysis_message ?? null,
   };
 }
 
@@ -118,7 +121,7 @@ const mockCrawlerClient: CrawlerApiClient = {
   },
 
   async startCollection(source: PageProduct, queryOverride?: string, config: CrawlConfig = { max_notes: 10, max_comments_per_note: 20 }, signal?: AbortSignal): Promise<CollectionStartResponse> {
-    const job = await this.startCrawl({ keyword: queryOverride?.trim() || source.title || "", page_product: source, preferences: {}, config }, signal);
+    const job = await this.startCrawl({ keyword: queryOverride?.trim() || source.title || "", page_product: source, config }, signal);
     return { ...job, job_id: job.job_id ?? `mock-crawl-${Date.now()}` };
   },
 

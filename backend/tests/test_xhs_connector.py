@@ -13,7 +13,7 @@ from app.api.xhs_connector import (
 )
 from app.services.persistence_service import PersistenceService
 from app.services.analysis_pipeline import AnalysisPipelineService
-from app.data.crawlers.xhs_client import AuthRequiredError
+from app.crawlers.xhs_client import AuthRequiredError
 
 
 class ImmediateExecutor:
@@ -70,9 +70,12 @@ class RecordingAnalysisPipeline:
         self.calls = 0
         self.delegate = AnalysisPipelineService()
 
-    def run_with_llm_response(self, dataset):
+    def run_with_llm_response(self, dataset, progress_callback=None):
         self.calls += 1
-        return self.delegate.run_with_llm_response(dataset)
+        return self.delegate.run_with_llm_response(
+            dataset,
+            progress_callback=progress_callback,
+        )
 
 
 def test_frontend_llm_summary_fields_exposes_complete_validated_summary():
@@ -271,6 +274,10 @@ def test_collection_only_persists_data_until_analysis_is_requested(tmp_path):
     assert "statistics" in analysis_result
     assert (tmp_path / "result" / f"{job_id}.json").is_file()
     assert pipeline.calls == 1
+    completed = service.jobs.get(job_id)
+    assert completed["analysis_status"] == "succeeded"
+    assert completed["analysis_stage"] == "completed"
+    assert completed["analysis_progress"] == 1
 
 
 def test_saved_collection_id_can_be_analyzed_after_service_restart(tmp_path):
