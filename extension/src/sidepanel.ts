@@ -234,6 +234,21 @@ function aspectCodeFromLabel(label: string, index: number): string {
 }
 
 function aspectsFromCollectionView(view: AnalysisViewModel): Aspect[] {
+  if (view.llm_summary?.aspects.length) {
+    return view.llm_summary.aspects.map((aspect, index) => ({
+      aspect_code: aspectCodeFromLabel(aspect.name, index),
+      aspect_label: aspect.name,
+      mention_count: aspect.mention_count,
+      raw_sentiment_score: null,
+      trusted_sentiment_score: aspect.trust_aware_score,
+      positive_ratio: aspect.positive_ratio,
+      neutral_ratio: aspect.neutral_ratio,
+      negative_ratio: aspect.negative_ratio,
+      platform_disagreement_score: null,
+      top_claim_ids: [],
+      evidence_content_ids: aspect.evidence_ids,
+    }));
+  }
   const sentiment = view.sample.sentiment_distribution;
   const fallbackScore = scoreFromSentimentDistribution(sentiment);
   return view.attributes.slice(0, 8).map((attribute, index) => {
@@ -304,6 +319,10 @@ function listText(values: string[]): string {
   return values.length ? values.join("、") : "暂无数据";
 }
 
+function evidenceIdText(values: string[]): string {
+  return values.length ? values.join("、") : "暂无";
+}
+
 function sentimentText(distribution: { positive: number | null; neutral: number | null; negative: number | null } | null): string {
   if (!distribution) return "暂无数据";
   return `正面 ${percent(distribution.positive)} / 中性 ${percent(distribution.neutral)} / 负面 ${percent(distribution.negative)}`;
@@ -327,6 +346,11 @@ function resultPayload(result: unknown): unknown {
   if (!result || typeof result !== "object") return result;
   const record = result as { analysis?: unknown; data?: unknown; result?: unknown; raw?: unknown };
   return record.analysis ?? record.data ?? record.result ?? record.raw ?? result;
+}
+
+function applyRecommendedAnalysisMode(analysis: unknown): void {
+  const recommendedMode = normalizeAnalysisResult(analysis).llm_summary?.purchase_reference?.recommended_default_mode;
+  if (recommendedMode) state.mode = recommendedMode;
 }
 
 function numberAtPath(input: unknown, path: string): number | null {
@@ -458,8 +482,11 @@ function render(): void {
   const pageProduct = state.pageProduct;
   const fallbackProduct = analysis.product ?? state.resolve.product;
   const collectionView = state.collectionResult ? normalizeAnalysisResult(state.collectionResult) : null;
+  const collectionPurchaseReference = collectionView?.llm_summary?.purchase_reference;
   const summary = collectionView
-    ? (collectionView.purchase_advice !== "暂无数据" ? collectionView.purchase_advice : collectionView.overall)
+    ? (collectionPurchaseReference
+      ? (state.mode === "raw" ? collectionPurchaseReference.raw_one_liner : collectionPurchaseReference.trust_aware_one_liner)
+      : (collectionView.purchase_advice !== "暂无数据" ? collectionView.purchase_advice : collectionView.overall))
     : analysis.summaries[state.mode].one_sentence_summary;
   const collectionFallbackScore = collectionView ? scoreFromSentimentDistribution(collectionView.sample.sentiment_distribution) : null;
   const rawScore = collectionView ? (collectionView.sample.raw_sentiment_score ?? collectionFallbackScore) : analysis.overview.raw_sentiment_score;
@@ -498,6 +525,7 @@ function render(): void {
         <div class="section-heading"><div><span class="eyebrow">一句话购买参考</span><h2>${state.mode === "trust_aware" ? "可信感知结论" : "原始评价结论"}</h2></div>${renderToggle()}</div>
         <div class="demo-analysis-product"><span>${collectionView ? "当前真实采集商品" : "当前选择的演示分析商品"}</span><strong>${text(fallbackProduct.canonical_name)}</strong><small>${text(fallbackProduct.brand)} · ${text(fallbackProduct.model)}</small></div>
         <p class="summary-text">${text(summary)}</p>
+        ${collectionPurchaseReference?.reasons_for_difference.length ? `<div class="change-box"><strong>Raw 与 Trust-aware 结论差异</strong>${collectionPurchaseReference.reasons_for_difference.map((reason) => `<p class="claim-link">${escapeHtml(reason)}</p>`).join("")}</div>` : ""}
         ${state.mode === "trust_aware" && analysis.summaries.changed_claims.length ? `<div class="change-box"><strong>为什么结论有变化？</strong>${analysis.summaries.changed_claims.map((claim) => `<button class="claim-link" data-claim="${escapeHtml(claim.claim_id)}"><span>${escapeHtml(claim.text)}</span>${escapeHtml(claim.reason)} <b>查看证据 →</b></button>`).join("")}</div>` : ""}
       </section>
 
@@ -509,10 +537,11 @@ function render(): void {
           ${renderMetric("按偏好推荐", fitScore.score, true)}
           <div class="confidence"><span>分析置信度</span><strong>${percent(confidence)}</strong></div>
         </div>
-        <p class="fine-print">分数仅反映小红书笔记与评论中的评价倾向，并非商品客观质量分。</p>
+        <p class="fine-print">${text(collectionView?.llm_summary?.score_disclaimer ?? "分数仅反映小红书笔记与评论中的评价倾向，并非商品客观质量分。")}</p>
       </section>
 
       ${renderXhsAnalysisOverview(state.collectionResult ?? analysis)}
+      ${collectionView ? renderCompleteLlmSummary(collectionView) : ""}
 
       <section class="card">
         <div class="section-heading"><div><span class="eyebrow">具体表现</span><h2>方面评价</h2></div><small>点击查看证据</small></div>
@@ -599,7 +628,7 @@ function renderMetric(label: string, value: number | null, trusted: boolean): st
 function renderAspect(aspect: Aspect): string {
   const disagreement = aspect.platform_disagreement_score !== null && aspect.platform_disagreement_score >= 0.45;
   return `<button class="aspect-row" data-aspect="${escapeHtml(aspect.aspect_code)}" data-label="${escapeHtml(aspect.aspect_label)}">
-    <div class="aspect-top"><div><strong>${escapeHtml(aspect.aspect_label)}</strong><small>${aspect.mention_count.toLocaleString("zh-CN")} 次提及 ${disagreement ? `<em>评论分歧较高</em>` : ""}</small></div><span class="aspect-score">${score(aspect.trusted_sentiment_score)}<small>/100</small></span></div>
+    <div class="aspect-top"><div><strong>${escapeHtml(aspect.aspect_label)}</strong><small>${aspect.mention_count.toLocaleString("zh-CN")} 次提及${aspect.evidence_content_ids.length ? ` · 证据 ${escapeHtml(evidenceIdText(aspect.evidence_content_ids))}` : ""} ${disagreement ? `<em>评论分歧较高</em>` : ""}</small></div><span class="aspect-score">${score(aspect.trusted_sentiment_score)}<small>/100</small></span></div>
     <div class="sentiment-bar" aria-label="正面 ${percent(aspect.positive_ratio)}，中性 ${percent(aspect.neutral_ratio)}，负面 ${percent(aspect.negative_ratio)}">
       <i class="positive" style="width:${(aspect.positive_ratio ?? 0) * 100}%"></i><i class="neutral" style="width:${(aspect.neutral_ratio ?? 0) * 100}%"></i><i class="negative" style="width:${(aspect.negative_ratio ?? 0) * 100}%"></i>
     </div>
@@ -639,8 +668,6 @@ function renderXhsAnalysisOverview(analysis: ProductAnalysisData | unknown): str
     <div class="xhs-insight-list">
       <p><strong>情感分布：</strong>${escapeHtml(sentimentText(view.sample.sentiment_distribution))}</p>
       <p><strong>总体评价：</strong>${escapeHtml(view.overall)}</p>
-      <p><strong>高频优点：</strong>${escapeHtml(listText(view.strengths))}</p>
-      <p><strong>高频缺点：</strong>${escapeHtml(listText(view.weaknesses))}</p>
       <p><strong>产品属性：</strong>${view.attributes.length ? view.attributes.map(attributeText).join("；") : "暂无数据"}</p>
       <p><strong>使用场景：</strong>${escapeHtml(listText(view.scenes))}</p>
       <p><strong>用户类型：</strong>${escapeHtml(listText(view.suitable_users))}</p>
@@ -651,12 +678,73 @@ function renderXhsAnalysisOverview(analysis: ProductAnalysisData | unknown): str
   </section>`;
 }
 
+function renderStatementList(values: string[], kind: "pro" | "con"): string {
+  if (!values.length) return renderEmpty(kind === "pro" ? "暂无产品优点" : "暂无产品缺点");
+  return `<ol class="statement-list ${kind}">${values.map((value) => `<li>${escapeHtml(value)}</li>`).join("")}</ol>`;
+}
+
+function renderCompleteLlmSummary(view: AnalysisViewModel): string {
+  const summary = view.llm_summary;
+  if (!summary) return "";
+  const sample = summary.sample_overview;
+  const platform = summary.platform;
+  const purchase = summary.purchase_reference;
+  const evidenceCount = summary.evidence_details.length;
+  return `
+    <section class="card llm-pros-cons-card">
+      <div class="section-heading"><div><span class="eyebrow">大模型产品结论</span><h2>3 条优点与 3 条缺点</h2></div></div>
+      <div class="pros-cons-grid">
+        <div class="statement-group pro"><h3><span>+</span>产品优点</h3>${renderStatementList(view.strengths, "pro")}</div>
+        <div class="statement-group con"><h3><span>−</span>产品缺点</h3>${renderStatementList(view.weaknesses, "con")}</div>
+      </div>
+    </section>
+
+    <section class="card llm-meta-card">
+      <div class="section-heading"><div><span class="eyebrow">完整模型输出</span><h2>样本、模式与限制</h2></div><small>${evidenceCount} 条证据</small></div>
+      <dl class="llm-detail-grid">
+        <div><dt>分析笔记</dt><dd>${countText(sample.posts_analyzed)}</dd></div>
+        <div><dt>评论数量</dt><dd>${countText(sample.comment_count)}</dd></div>
+        <div><dt>${platform?.name === "xiaohongshu" ? "小红书内容" : platform?.name ? escapeHtml(platform.name) : "平台内容"}</dt><dd>${countText(platform?.content_count ?? null)}</dd></div>
+        <div><dt>建议模式</dt><dd>${purchase?.recommended_default_mode === "raw" ? "Raw" : purchase?.recommended_default_mode === "trust_aware" ? "Trust-aware" : "暂无数据"}</dd></div>
+        <div><dt>平台原始分</dt><dd>${score(platform?.raw_score ?? null)}</dd></div>
+        <div><dt>平台可信分</dt><dd>${score(platform?.trust_aware_score ?? null)}</dd></div>
+        <div><dt>高风险占比</dt><dd>${percent(platform?.high_risk_content_ratio ?? null)}</dd></div>
+        <div><dt>引用证据</dt><dd>${purchase?.evidence_ids.length ?? 0} 条</dd></div>
+      </dl>
+      ${sample.coverage_note ? `<div class="llm-note-block"><strong>样本覆盖说明</strong><p>${escapeHtml(sample.coverage_note)}</p></div>` : ""}
+      ${purchase?.reasons_for_difference.length ? `<div class="llm-note-block"><strong>评分差异原因</strong><ul>${purchase.reasons_for_difference.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></div>` : ""}
+      ${purchase?.evidence_ids.length ? `<div class="llm-note-block"><strong>购买结论证据 ID</strong><p class="evidence-id-copy">${escapeHtml(evidenceIdText(purchase.evidence_ids))}</p></div>` : ""}
+      <div class="llm-note-block"><strong>分析限制</strong>${summary.limitations.length ? `<ul>${summary.limitations.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : `<p>暂无额外限制说明。</p>`}</div>
+    </section>
+
+    ${renderLlmEvidenceDetails(view)}
+  `;
+}
+
+function renderLlmEvidenceDetails(view: AnalysisViewModel): string {
+  const evidence = view.llm_summary?.evidence_details ?? [];
+  if (!evidence.length) return "";
+  const sentimentLabels: Record<string, string> = { positive: "正面", neutral: "中性", negative: "负面", mixed: "混合", unknown: "未知" };
+  return `<section class="card llm-evidence-card">
+    <div class="section-heading"><div><span class="eyebrow">模型引用内容</span><h2>证据详情</h2></div><small>${evidence.length} 条</small></div>
+    <div class="inline-evidence-list">
+      ${evidence.map((item) => `<article>
+        <div class="inline-evidence-meta"><span class="source-platform">小红书</span><span>${dateTime(item.publish_time)} · ${sentimentLabels[item.sentiment ?? "unknown"] ?? "未知"} · ${item.risk_level === "high" ? "高风险" : item.risk_level === "medium" ? "中风险" : item.risk_level === "low" ? "低风险" : "风险级别暂无"} · 风险分 ${item.risk_score === null ? "暂无" : score(item.risk_score)}</span></div>
+        <h3>${escapeHtml(item.title)}</h3>
+        <blockquote>${text(item.quote)}</blockquote>
+        ${item.context ? `<p>${escapeHtml(item.context)}</p>` : ""}
+        <div class="inline-evidence-footer"><code>${item.post_id ? `帖子 ${escapeHtml(item.post_id)} · ` : ""}证据 ${text(item.evidence_id)}</code>${item.source_url ? `<button class="evidence-link external-link" data-source-url="${escapeHtml(item.source_url)}" data-source-expires-at="${escapeHtml(item.link_expires_at ?? "")}">查看原文 ↗</button>` : ""}</div>
+      </article>`).join("")}
+    </div>
+  </section>`;
+}
+
 function renderSources(analysis: ProductAnalysisData | unknown): string {
   const xhsSources = normalizeAnalysisResult(analysis).evidence;
   return `<section class="card">
     <div class="section-heading"><div><span class="eyebrow">${USE_MOCK ? "Mock 小红书内容" : "小红书内容"}</span><h2>小红书代表性内容</h2></div></div>
     <p class="field-hint">原文将在新标签页打开；若小红书网页要求登录，请在当前浏览器完成登录。该登录与采集服务登录相互独立。</p>
-    ${xhsSources.length ? `<div class="source-list">${xhsSources.map((source) => `<button class="source-row external-link" data-source-url="${escapeHtml(source.source_url ?? "")}" data-source-expires-at="${escapeHtml(source.link_expires_at ?? "")}" ${source.source_url ? "" : "disabled"}><span class="source-platform">小红书</span><strong>${escapeHtml(source.title)}</strong><small>${dateTime(source.publish_time)} · 相关度 ${percent(source.relevance_score)}${source.risk_score === null ? "" : ` · 风险分数 ${source.risk_score.toFixed(2)}`}${source.quote ? ` · ${escapeHtml(source.quote)}` : ""}</small><i>↗</i></button>`).join("")}</div>` : renderEmpty("暂无小红书代表性内容")}
+    ${xhsSources.length ? `<div class="source-list">${xhsSources.map((source) => `<button class="source-row external-link" data-source-url="${escapeHtml(source.source_url ?? "")}" data-source-expires-at="${escapeHtml(source.link_expires_at ?? "")}" ${source.source_url ? "" : "disabled"}><span class="source-platform">小红书</span><strong>${escapeHtml(source.title)}</strong><small>${source.post_id ? `帖子 ${escapeHtml(source.post_id)} · ` : ""}${dateTime(source.publish_time)} · 相关度 ${percent(source.relevance_score)}${source.risk_score === null ? "" : ` · 风险分数 ${source.risk_score.toFixed(2)}`}${source.evidence_ids.length ? ` · 证据 ${escapeHtml(evidenceIdText(source.evidence_ids))}` : ""}${source.quote ? ` · ${escapeHtml(source.quote)}` : ""}</small><i>↗</i></button>`).join("")}</div>` : renderEmpty("暂无小红书代表性内容")}
   </section>`;
 }
 
@@ -953,6 +1041,7 @@ function applyStoredProductResult(record: StoredProductResult): void {
   };
   state.collection.formattedPreview = record.formattedPreview;
   state.collectionResult = record.rawCollectionResult;
+  applyRecommendedAnalysisMode(record.rawCollectionResult ?? record.analysisResult);
   if (record.noteCount || record.commentCount) {
     state.collection.crawlJob = { ...state.collection.crawlJob, collected_notes: record.noteCount, collected_comments: record.commentCount };
   }
@@ -1459,6 +1548,7 @@ async function submitFormattedPreview(): Promise<void> {
   try {
     const result = await crawlerClient.analyzeCollection(jobId, controller.signal);
     state.collectionResult = resultPayload(result);
+    applyRecommendedAnalysisMode(state.collectionResult);
     if (currentProductKey) await saveProductResult(currentProductKey, { rawCollectionResult: state.collectionResult });
     state.collection.submitMessage = USE_MOCK ? "Mock：已完成模拟分析。" : "已完成本次采集数据的分析。";
   } catch (error: unknown) {

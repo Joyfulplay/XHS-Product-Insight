@@ -4,24 +4,28 @@ import os
 import hashlib
 import requests
 from io import BytesIO
+from pathlib import Path
 from PIL import Image
 from datetime import datetime
 from app.schemas.crawler import CrawlNote
 from app.schemas.cleaned_note import CleanedNote, CleanedComment, CleanedImage
 
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+DEFAULT_IMAGE_OUTPUT_DIR = str(PROJECT_ROOT / "data" / "processed" / "image")
+
+
 class ContentCleaner:
-    def __init__(self, image_output_dir: str = "data/processed/images"):
+    def __init__(self, image_output_dir: str = DEFAULT_IMAGE_OUTPUT_DIR):
         self.version = "clean-v2.0"
         self.image_output_dir = image_output_dir
-        os.makedirs(self.image_output_dir, exist_ok=True)
         
         # Regex patterns for noise reduction (Using Unicode escapes to prevent Windows encoding errors)
-        # \u8bdd\u9898 = »°Ìâ
+        # \u8bdd\u9898 = è¯é¢˜
         self.re_topic = re.compile(r'#.*?\[\u8bdd\u9898\]#|#\S+')
         self.re_xhs_emoji = re.compile(r'\[.*?R\]')
         self.re_emoji = re.compile(r'[\U00010000-\U0010ffff]')
         self.re_url = re.compile(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+')
-        # \u52a0=¼Ó, \u5fae\u4fe1=Î¢ÐÅ, \u4e3b\u9875\u770b=Ö÷Ò³¿´, \u4e3b\u9875\u94fe\u63a5=Ö÷Ò³Á´½Ó, \u79c1\u4fe1\u6211=Ë½ÐÅÎÒ, \u4ee3\u8d2d=´ú¹º, \u907f\u96f7=±ÜÀ×
+        # \u52a0=åŠ , \u5fae\u4fe1=å¾®ä¿¡, \u4e3b\u9875\u770b=ä¸»é¡µçœ‹, \u4e3b\u9875\u94fe\u63a5=ä¸»é¡µé“¾æŽ¥, \u79c1\u4fe1\u6211=ç§ä¿¡æˆ‘, \u4ee3\u8d2d=ä»£è´­, \u907f\u96f7=é¿é›·
         self.re_spam = re.compile(r'(\u52a0[vV]|\u5fae\u4fe1|\u4e3b\u9875\u770b|\u4e3b\u9875\u94fe\u63a5|\u79c1\u4fe1\u6211|\u4ee3\u8d2d|\u907f\u96f7)')
 
     def clean_text(self, text: str) -> str:
@@ -66,6 +70,7 @@ class ContentCleaner:
             filename = f"{img_hash}.jpg"
             filepath = os.path.join(self.image_output_dir, filename)
             
+            os.makedirs(self.image_output_dir, exist_ok=True)
             img.save(filepath, "JPEG", quality=80)
             
             # Return cleaned image record

@@ -358,20 +358,75 @@ export interface CollectionResultResponse {
 }
 
 export interface AnalysisEvidenceViewModel {
+  evidence_id: string | null;
+  post_id: string | null;
   title: string;
   author: string | null;
   quote: string | null;
+  context: string | null;
+  sentiment: "positive" | "neutral" | "negative" | "mixed" | "unknown" | null;
+  risk_level: "low" | "medium" | "high" | null;
   publish_time: string | null;
   relevance_score: number | null;
   risk_score: number | null;
   source_url: string | null;
   link_expires_at: string | null;
+  evidence_ids: string[];
 }
 
 export interface ProductAttributeViewModel {
   name: string;
   positive_mentions: number | null;
   negative_mentions: number | null;
+}
+
+export interface LlmPurchaseReferenceViewModel {
+  trust_aware_one_liner: string;
+  raw_one_liner: string;
+  recommended_default_mode: AnalysisMode | null;
+  reasons_for_difference: string[];
+  evidence_ids: string[];
+}
+
+export interface LlmAspectSummaryViewModel {
+  name: string;
+  trust_aware_score: number | null;
+  mention_count: number;
+  positive_ratio: number | null;
+  neutral_ratio: number | null;
+  negative_ratio: number | null;
+  evidence_ids: string[];
+}
+
+export interface LlmRecommendedSourceViewModel {
+  post_id: string;
+  title: string;
+  publish_time: string | null;
+  relevance: number | null;
+  risk_score: number | null;
+  url: string | null;
+  evidence_ids: string[];
+}
+
+export interface LlmSummaryViewModel {
+  purchase_reference: LlmPurchaseReferenceViewModel | null;
+  sample_overview: {
+    posts_analyzed: number | null;
+    comment_count: number | null;
+    coverage_note: string | null;
+  };
+  score_disclaimer: string | null;
+  platform: {
+    name: string;
+    content_count: number | null;
+    raw_score: number | null;
+    trust_aware_score: number | null;
+    high_risk_content_ratio: number | null;
+  } | null;
+  aspects: LlmAspectSummaryViewModel[];
+  recommended_sources: LlmRecommendedSourceViewModel[];
+  evidence_details: AnalysisEvidenceViewModel[];
+  limitations: string[];
 }
 
 export interface AnalysisViewModel {
@@ -400,6 +455,7 @@ export interface AnalysisViewModel {
   risk_reasons: RiskReason[];
   risk_caution: string | null;
   evidence: AnalysisEvidenceViewModel[];
+  llm_summary: LlmSummaryViewModel | null;
   empty_message: string | null;
 }
 

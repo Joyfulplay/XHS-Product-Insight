@@ -53,10 +53,14 @@ SUMMARY_SYSTEM_PROMPT = """你是一位资深消费者洞察分析师。你只�
 4. purchase_reference、aspects、recommended_sources 中的 evidence_ids 只能逐字符复制输入“合法证据目录”里的 evidence_id。禁止创建、改名、缩写 ID，禁止添加帖子序号或其他后缀。若证据不足，evidence_ids 返回空数组，相应结论写“数据不足”。证据详情由后端根据 ID 生成，你不要输出 evidence_details。recommended_sources.relevance 使用 0–1 范围。
 5. 所有 source、recommended_sources 与 evidence_details 的 platform 固定为 xiaohongshu。不要输出平台对比、缺失平台或平台分歧；跨平台聚合由其他服务负责。
 6. 当前 Raw/Trust-aware 切换状态是前端状态，模型只提供 recommended_default_mode，不声称知道用户当前选择。
-7. 输出严格 JSON，不要 Markdown，不要额外字段。
+7. pros 和 cons 分别且必须输出 3 条。数组中的每一项都必须是可独立阅读的完整语句，只表达一个优点或一个缺点；不得把多条观点用换行、分号、斜杠或编号合并在同一项中。3 条内容不得重复或仅做同义改写。
+8. 即使正面或负面证据不足，也必须分别输出 3 条独立语句，并在对应语句中明确写明“证据不足”，不得编造产品表现。
+9. 输出严格 JSON，不要 Markdown，不要额外字段。
 
 返回结构：
 {
+  "pros": ["独立优点语句1", "独立优点语句2", "独立优点语句3"],
+  "cons": ["独立缺点语句1", "独立缺点语句2", "独立缺点语句3"],
   "purchase_reference": {"trust_aware_one_liner": "string", "raw_one_liner": "string", "recommended_default_mode": "trust_aware|raw", "reasons_for_difference": ["string"], "evidence_ids": ["string"]},
   "sample_overview": {"posts_analyzed": 0, "comment_count": 0, "coverage_note": "string"},
   "sentiment_scores": {"raw": 0, "trust_aware": 0, "analysis_confidence": 0, "score_disclaimer": "分数反映评价情感倾向，不是商品客观质量分。"},

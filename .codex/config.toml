@@ -1,0 +1,9 @@
+#:schema https://developers.openai.com/codex/config-schema.json
+
+[shell_environment_policy]
+inherit = "all"
+
+[shell_environment_policy.set]
+CONDA_DEFAULT_ENV = "xhs"
+CONDA_PREFIX = "/home/mike/miniconda3/envs/xhs"
+PATH = "/home/mike/miniconda3/envs/xhs/bin:/home/mike/miniconda3/condabin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"

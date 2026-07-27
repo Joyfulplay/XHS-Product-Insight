@@ -209,6 +209,8 @@ class AnalysisPipelineService:
         return LlmInsights(
             overall_summary=summary.purchase_reference.trust_aware_one_liner,
             product_attributes=[aspect.name for aspect in summary.aspects],
+            pros=summary.pros,
+            cons=summary.cons,
             purchase_advice=summary.purchase_reference.trust_aware_one_liner,
         )
 

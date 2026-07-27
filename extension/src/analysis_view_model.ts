@@ -89,14 +89,88 @@ function unwrapAnalysis(input: unknown): unknown {
 function evidenceFromSource(source: ProductAnalysisData["top_sources"][number] | AnyRecord): AnalysisEvidenceViewModel {
   const noteId = firstString(source, ["note_id", "id"], "");
   return {
+    evidence_id: firstString(source, ["evidence_id", "content_id"], "") || null,
+    post_id: firstString(source, ["post_id", "note_id", "id"], "") || null,
     title: firstString(source, ["source_title", "title", "note_title"], "小红书代表性内容"),
     author: firstString(source, ["author_nickname", "author", "nickname"], "") || null,
     quote: firstString(source, ["quote", "summary", "context_text", "content"], "") || null,
+    context: firstString(source, ["context", "context_text"], "") || null,
+    sentiment: (["positive", "neutral", "negative", "mixed", "unknown"].includes(firstString(source, ["sentiment"], ""))
+      ? firstString(source, ["sentiment"], "")
+      : null) as AnalysisEvidenceViewModel["sentiment"],
+    risk_level: (["low", "medium", "high"].includes(firstString(source, ["risk_level"], ""))
+      ? firstString(source, ["risk_level"], "")
+      : null) as AnalysisEvidenceViewModel["risk_level"],
     publish_time: firstString(source, ["publish_time", "published_at", "created_at"], "") || null,
-    relevance_score: firstNumber(source, ["relevance_score", "score"], null),
+    relevance_score: firstNumber(source, ["relevance_score", "relevance", "score"], null),
     risk_score: firstNumber(source, ["risk_score"], null),
     source_url: firstString(source, ["source_url", "url", "note_url", "link"], "") || (noteId ? `https://www.xiaohongshu.com/explore/${encodeURIComponent(noteId)}` : null),
     link_expires_at: firstString(source, ["link_expires_at"], "") || null,
+    evidence_ids: firstStringArray(source, ["evidence_ids"]),
+  };
+}
+
+function normalizeLlmSummary(input: unknown): AnalysisViewModel["llm_summary"] {
+  const purchaseReference = getPath(input, "purchase_reference");
+  const sampleOverview = getPath(input, "sample_overview");
+  const platform = getPath(input, "platform");
+  const sentimentScores = getPath(input, "sentiment_scores");
+  const summaryAspects = firstRecordArray(input, ["aspects"]);
+  const recommendedSources = firstRecordArray(input, ["recommended_sources"]);
+  const evidenceDetails = firstRecordArray(input, ["evidence_details"]);
+  const hasSummary = isRecord(purchaseReference)
+    || isRecord(sampleOverview)
+    || isRecord(platform)
+    || isRecord(sentimentScores)
+    || summaryAspects.length > 0
+    || recommendedSources.length > 0
+    || evidenceDetails.length > 0
+    || firstStringArray(input, ["limitations"]).length > 0;
+  if (!hasSummary) return null;
+
+  return {
+    purchase_reference: isRecord(purchaseReference) ? {
+      trust_aware_one_liner: firstString(purchaseReference, ["trust_aware_one_liner"], "暂无数据"),
+      raw_one_liner: firstString(purchaseReference, ["raw_one_liner"], "暂无数据"),
+      recommended_default_mode: (["raw", "trust_aware"].includes(firstString(purchaseReference, ["recommended_default_mode"], ""))
+        ? firstString(purchaseReference, ["recommended_default_mode"], "")
+        : null) as "raw" | "trust_aware" | null,
+      reasons_for_difference: firstStringArray(purchaseReference, ["reasons_for_difference"]),
+      evidence_ids: firstStringArray(purchaseReference, ["evidence_ids"]),
+    } : null,
+    sample_overview: {
+      posts_analyzed: isRecord(sampleOverview) ? firstNumber(sampleOverview, ["posts_analyzed"], null) : null,
+      comment_count: isRecord(sampleOverview) ? firstNumber(sampleOverview, ["comment_count"], null) : null,
+      coverage_note: isRecord(sampleOverview) ? firstString(sampleOverview, ["coverage_note"], "") || null : null,
+    },
+    score_disclaimer: isRecord(sentimentScores) ? firstString(sentimentScores, ["score_disclaimer"], "") || null : null,
+    platform: isRecord(platform) ? {
+      name: firstString(platform, ["name"], "xiaohongshu"),
+      content_count: firstNumber(platform, ["content_count"], null),
+      raw_score: firstNumber(platform, ["raw_score"], null),
+      trust_aware_score: firstNumber(platform, ["trust_aware_score"], null),
+      high_risk_content_ratio: firstNumber(platform, ["high_risk_content_ratio"], null),
+    } : null,
+    aspects: summaryAspects.map((aspect) => ({
+      name: firstString(aspect, ["name"], "暂无数据"),
+      trust_aware_score: firstNumber(aspect, ["trust_aware_score"], null),
+      mention_count: firstNumber(aspect, ["mention_count"], 0) ?? 0,
+      positive_ratio: firstNumber(aspect, ["positive_ratio"], null),
+      neutral_ratio: firstNumber(aspect, ["neutral_ratio"], null),
+      negative_ratio: firstNumber(aspect, ["negative_ratio"], null),
+      evidence_ids: firstStringArray(aspect, ["evidence_ids"]),
+    })),
+    recommended_sources: recommendedSources.map((source) => ({
+      post_id: firstString(source, ["post_id"], ""),
+      title: firstString(source, ["title"], "小红书代表性内容"),
+      publish_time: firstString(source, ["publish_time"], "") || null,
+      relevance: firstNumber(source, ["relevance"], null),
+      risk_score: firstNumber(source, ["risk_score"], null),
+      url: firstString(source, ["url"], "") || null,
+      evidence_ids: firstStringArray(source, ["evidence_ids"]),
+    })),
+    evidence_details: evidenceDetails.map(evidenceFromSource),
+    limitations: firstStringArray(input, ["limitations"]),
   };
 }
 
@@ -137,7 +211,10 @@ function normalizeRiskReasons(input: unknown): AnalysisViewModel["risk_reasons"]
 export function normalizeAnalysisResult(input: ProductAnalysisData | unknown | null | undefined): AnalysisViewModel {
   const analysis = unwrapAnalysis(input);
   const aspects = firstRecordArray(analysis, ["aspects", "aspect_analysis", "statistics.aspects", "structured_data.aspects"]);
-  const sources = firstRecordArray(analysis, ["representative_notes", "top_sources", "evidence", "sources"]).filter((source) => firstString(source, ["platform"], "xiaohongshu") === "xiaohongshu");
+  const sources = [
+    ...firstRecordArray(analysis, ["representative_notes", "top_sources", "evidence", "sources"]),
+    ...firstRecordArray(analysis, ["recommended_sources"]),
+  ].filter((source) => firstString(source, ["platform"], "xiaohongshu") === "xiaohongshu");
   const notes = firstArray(analysis, ["notes", "data.notes", "result.notes", "raw.notes", "raw.data.notes"]);
   const collectionNoteCount = firstNumber(analysis, [
     "collection.note_count",
@@ -221,8 +298,8 @@ export function normalizeAnalysisResult(input: ProductAnalysisData | unknown | n
       negative: firstNumber(analysis, ["statistics.sentiment_distribution.negative"], null),
     }
     : null;
-  const strengths = firstStringArray(analysis, ["llm_insights.pros", "strengths", "advantages", "pros", "insights.strengths", "summary.strengths"]);
-  const weaknesses = firstStringArray(analysis, ["llm_insights.cons", "weaknesses", "disadvantages", "cons", "insights.weaknesses", "summary.weaknesses"]);
+  const strengths = firstStringArray(analysis, ["pros", "llm_insights.pros", "strengths", "advantages", "insights.strengths", "summary.strengths"]);
+  const weaknesses = firstStringArray(analysis, ["cons", "llm_insights.cons", "weaknesses", "disadvantages", "insights.weaknesses", "summary.weaknesses"]);
   const keywords = firstStringArray(analysis, ["statistics.keywords", "keywords", "high_frequency_keywords", "hot_keywords"]);
   const explicitScenes = firstStringArray(analysis, ["llm_insights.usage_scenarios", "usage_scenarios", "scenarios", "scenes", "insights.usage_scenarios"]);
   const explicitSuitable = firstStringArray(analysis, ["llm_insights.user_types", "suitable_users", "target_users", "user_types", "insights.suitable_users"]);
@@ -261,6 +338,7 @@ export function normalizeAnalysisResult(input: ProductAnalysisData | unknown | n
     risk_reasons: riskReasons,
     risk_caution: firstString(analysis, ["risk_overview.caution", "risk_summary.display_note", "risk.caution"], "") || null,
     evidence: sources.map(evidenceFromSource),
+    llm_summary: normalizeLlmSummary(analysis),
     empty_message: noteCount === 0 ? "后端采集已完成，但未采集到小红书笔记。可以修改关键词后重新采集。" : null,
   };
 }

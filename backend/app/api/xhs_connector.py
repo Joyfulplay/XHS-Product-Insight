@@ -140,7 +140,7 @@ def normalize_collection_dataset(dataset: dict[str, Any]) -> dict[str, Any]:
 
 
 def frontend_llm_summary_fields(llm_response: dict[str, Any] | None) -> dict[str, Any]:
-    """Expose validated aggregate metrics without returning raw LLM post data."""
+    """Expose the complete validated summary without raw per-post LLM data."""
 
     if not isinstance(llm_response, dict):
         return {}
@@ -148,14 +148,24 @@ def frontend_llm_summary_fields(llm_response: dict[str, Any] | None) -> dict[str
     if not isinstance(summary, dict):
         return {}
 
-    result: dict[str, Any] = {}
-    sentiment_scores = summary.get("sentiment_scores")
-    if isinstance(sentiment_scores, dict):
-        result["sentiment_scores"] = sanitize_value(sentiment_scores)
-    risk_overview = summary.get("risk_overview")
-    if isinstance(risk_overview, dict):
-        result["risk_overview"] = sanitize_value(risk_overview)
-    return result
+    allowed_summary_fields = (
+        "pros",
+        "cons",
+        "purchase_reference",
+        "sample_overview",
+        "sentiment_scores",
+        "platform",
+        "aspects",
+        "risk_overview",
+        "recommended_sources",
+        "evidence_details",
+        "limitations",
+    )
+    return {
+        field_name: sanitize_value(summary[field_name], field_name)
+        for field_name in allowed_summary_fields
+        if field_name in summary
+    }
 
 
 class LoginRequest(BaseModel):

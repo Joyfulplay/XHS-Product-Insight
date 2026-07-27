@@ -109,6 +109,16 @@ def valid_post_output():
 
 def valid_summary_output():
     return {
+        "pros": [
+            "佩戴体验较为舒适。",
+            "降噪表现获得正面反馈。",
+            "续航能够满足日常使用。",
+        ],
+        "cons": [
+            "产品价格相对较高。",
+            "长时间佩戴可能产生闷热感。",
+            "部分使用场景的证据不足。",
+        ],
         "purchase_reference": {
             "trust_aware_one_liner": "当前反馈偏正面，建议结合需求判断。",
             "raw_one_liner": "当前反馈偏正面。",
@@ -277,6 +287,25 @@ def test_summary_schema_rejects_unknown_evidence_references():
 
     with pytest.raises(ValidationError, match="unknown summary evidence_ids"):
         XiaohongshuSummaryOutput.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "statements"),
+    [
+        ("pros", ["优点一。", "优点二。"]),
+        ("cons", ["缺点一。", "缺点二。", "缺点三。", "缺点四。"]),
+        ("pros", ["同一优点。", "同一优点。", "另一优点。"]),
+        ("cons", ["缺点一。\n缺点二。", "缺点三。", "缺点四。"]),
+    ],
+)
+def test_summary_schema_requires_three_independent_pros_and_cons(
+    field_name, statements
+):
+    payload = valid_summary_model_output()
+    payload[field_name] = statements
+
+    with pytest.raises(ValidationError):
+        XiaohongshuSummaryModelOutput.model_validate(payload)
 
 
 def test_summary_model_retries_with_exact_allowed_evidence_ids(monkeypatch):

@@ -75,12 +75,26 @@ class RecordingAnalysisPipeline:
         return self.delegate.run_with_llm_response(dataset)
 
 
-def test_frontend_llm_summary_fields_exposes_only_requested_aggregate_metrics():
+def test_frontend_llm_summary_fields_exposes_complete_validated_summary():
     result = frontend_llm_summary_fields(
         {
             "product_name": "耳机",
             "post_analyses": [{"private": "not-for-frontend"}],
             "summary": {
+                "pros": ["优点一。", "优点二。", "优点三。"],
+                "cons": ["缺点一。", "缺点二。", "缺点三。"],
+                "purchase_reference": {
+                    "trust_aware_one_liner": "可信结论",
+                    "raw_one_liner": "原始结论",
+                    "recommended_default_mode": "trust_aware",
+                    "reasons_for_difference": ["高风险内容被降权"],
+                    "evidence_ids": ["e1"],
+                },
+                "sample_overview": {
+                    "posts_analyzed": 10,
+                    "comment_count": 20,
+                    "coverage_note": "样本覆盖有限",
+                },
                 "sentiment_scores": {
                     "raw": 82,
                     "trust_aware": 76,
@@ -93,12 +107,29 @@ def test_frontend_llm_summary_fields_exposes_only_requested_aggregate_metrics():
                     "reason_distribution": [{"reason": "营销式表达", "count": 2}],
                     "caution": "风险分数表示内容需要谨慎参考，不代表评论一定虚假。",
                 },
+                "platform": {
+                    "name": "xiaohongshu",
+                    "content_count": 10,
+                    "raw_score": 82,
+                    "trust_aware_score": 76,
+                    "high_risk_content_ratio": 0.2,
+                },
+                "aspects": [],
+                "recommended_sources": [],
+                "evidence_details": [],
+                "limitations": ["仅分析小红书样本"],
             },
         }
     )
 
+    assert result["pros"] == ["优点一。", "优点二。", "优点三。"]
+    assert result["cons"] == ["缺点一。", "缺点二。", "缺点三。"]
+    assert result["purchase_reference"]["trust_aware_one_liner"] == "可信结论"
+    assert result["sample_overview"]["posts_analyzed"] == 10
     assert result["sentiment_scores"]["trust_aware"] == 76
+    assert result["platform"]["content_count"] == 10
     assert result["risk_overview"]["high_risk_content_count"] == 2
+    assert result["limitations"] == ["仅分析小红书样本"]
     assert "post_analyses" not in result
 
 
