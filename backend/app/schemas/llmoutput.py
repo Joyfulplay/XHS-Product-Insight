@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, model_validator
 
 
 Sentiment = Literal["positive", "neutral", "negative", "mixed", "unknown"]
@@ -84,7 +84,9 @@ class ImageAnalysisOutput(OutputModel):
     image_caveats: list[str] = Field(default_factory=list)
 
 
-class PostAnalysisOutput(OutputModel):
+class PostAnalysisModelOutput(OutputModel):
+    """The JSON object requested directly from the post-analysis model turn."""
+
     post_id: str = Field(min_length=1)
     source: XiaohongshuSource
     post_sentiment: Sentiment
@@ -98,16 +100,24 @@ class PostAnalysisOutput(OutputModel):
     purchase_intent: Literal["recommend", "consider", "not_recommend", "unknown"]
     risks_or_caveats: list[str] = Field(default_factory=list)
     confidence: float = Field(ge=0, le=1)
-    image_analysis: ImageAnalysisOutput
 
     @model_validator(mode="after")
-    def evidence_references_must_exist(self) -> "PostAnalysisOutput":
-        known_ids = {item.evidence_id for item in self.evidence_items}
+    def evidence_references_must_exist(self) -> "PostAnalysisModelOutput":
+        evidence_ids = [item.evidence_id for item in self.evidence_items]
+        if len(evidence_ids) != len(set(evidence_ids)):
+            raise ValueError("evidence_item evidence_id values must be unique within a post")
+        known_ids = set(evidence_ids)
         used_ids = {evidence_id for aspect in self.aspects for evidence_id in aspect.evidence_ids}
         missing_ids = used_ids - known_ids
         if missing_ids:
             raise ValueError(f"unknown aspect evidence_ids: {sorted(missing_ids)}")
         return self
+
+
+class PostAnalysisOutput(PostAnalysisModelOutput):
+    """Validated post output enriched with the separately validated image turn."""
+
+    image_analysis: ImageAnalysisOutput
 
 
 class PurchaseReference(OutputModel):
@@ -127,7 +137,7 @@ class SampleOverview(OutputModel):
 class SentimentScores(OutputModel):
     raw: float = Field(ge=0, le=100)
     trust_aware: float = Field(ge=0, le=100)
-    analysis_confidence: float = Field(ge=0, le=100)
+    analysis_confidence: int = Field(ge=0, le=100)
     score_disclaimer: Literal["分数反映评价情感倾向，不是商品客观质量分。"]
 
 
@@ -172,7 +182,7 @@ class RecommendedSource(OutputModel):
     platform: Literal["xiaohongshu"] = "xiaohongshu"
     title: str = ""
     publish_time: str = "未提供"
-    relevance: float = Field(ge=0, le=100)
+    relevance: float = Field(ge=0, le=1)
     risk_score: float = Field(ge=0, le=100)
     url: str = ""
     evidence_ids: list[str] = Field(default_factory=list)
@@ -192,7 +202,14 @@ class EvidenceDetail(OutputModel):
     url: str = ""
 
 
-class XiaohongshuSummaryOutput(OutputModel):
+class XiaohongshuSummaryModelOutput(OutputModel):
+    """The aggregate fields requested directly from the summary model.
+
+    Evidence detail records are deliberately excluded: the service materializes
+    them from the validated per-post evidence catalog after the model selects
+    evidence IDs.
+    """
+
     purchase_reference: PurchaseReference
     sample_overview: SampleOverview
     sentiment_scores: SentimentScores
@@ -200,8 +217,58 @@ class XiaohongshuSummaryOutput(OutputModel):
     aspects: list[AspectSummary] = Field(default_factory=list)
     risk_overview: RiskOverview
     recommended_sources: list[RecommendedSource] = Field(default_factory=list)
-    evidence_details: list[EvidenceDetail] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def evidence_references_must_exist_in_input(
+        self,
+        info: ValidationInfo,
+    ) -> "XiaohongshuSummaryModelOutput":
+        """Reject references outside the service-provided evidence catalog."""
+
+        context = info.context if isinstance(info.context, dict) else {}
+        allowed_ids = context.get("allowed_evidence_ids")
+        if allowed_ids is None:
+            return self
+
+        known_ids = set(allowed_ids)
+        missing_ids = self.referenced_evidence_ids() - known_ids
+        if missing_ids:
+            raise ValueError(f"unknown input evidence_ids: {sorted(missing_ids)}")
+        return self
+
+    def referenced_evidence_ids(self) -> set[str]:
+        used_ids = set(self.purchase_reference.evidence_ids)
+        used_ids.update(
+            evidence_id
+            for aspect in self.aspects
+            for evidence_id in aspect.evidence_ids
+        )
+        used_ids.update(
+            evidence_id
+            for source in self.recommended_sources
+            for evidence_id in source.evidence_ids
+        )
+        return used_ids
+
+
+class XiaohongshuSummaryOutput(XiaohongshuSummaryModelOutput):
+    """Final aggregate output enriched from the trusted evidence catalog."""
+
+    evidence_details: list[EvidenceDetail] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def evidence_references_must_be_unique_and_exist(self) -> "XiaohongshuSummaryOutput":
+        evidence_ids = [item.evidence_id for item in self.evidence_details]
+        if len(evidence_ids) != len(set(evidence_ids)):
+            raise ValueError("evidence_detail evidence_id values must be unique")
+
+        known_ids = set(evidence_ids)
+        used_ids = self.referenced_evidence_ids()
+        missing_ids = used_ids - known_ids
+        if missing_ids:
+            raise ValueError(f"unknown summary evidence_ids: {sorted(missing_ids)}")
+        return self
 
 
 class XiaohongshuAnalysisOutput(OutputModel):

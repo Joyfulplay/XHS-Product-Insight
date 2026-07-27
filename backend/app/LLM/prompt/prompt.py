@@ -22,7 +22,7 @@ POST_ANALYSIS_SYSTEM_PROMPT = """你是一位严谨的消费洞察研究员，�
 2. 区分发帖人观点与评论者观点；不要将营销话术当作真实体验。
 3. 上一轮的图片观察只是证据之一。可以在文字证据冲突或不足时保留不确定性；不可臆测图像中不可见内容。
 4. 对情绪、效果和结论必须给出简短证据，并保留不确定性。
-5. 为每个可用于结论的原文/图像观察创建 evidence_item。quote 必须是输入中的原文短摘录；图像证据用“图片观察：...”标注，不能伪装成用户原话。
+5. 为每个可用于结论的原文/图像观察创建 evidence_item。每个 evidence_id 在本帖内必须唯一，不要把同一个 evidence_id 分配给不同 quote。quote 必须是输入中的原文短摘录；图像证据用“图片观察：...”标注，不能伪装成用户原话。
 6. risk_score 仅衡量“该内容是否需要谨慎参考”：0=低风险，100=高风险。可用原因仅限营销式表达、缺少使用上下文、主张无法由内容支持、与本帖其他信息矛盾。它不表示内容虚假，也不能基于作者身份推断。
 7. 返回严格 JSON，不要 Markdown，不要额外字段。
 
@@ -48,9 +48,9 @@ SUMMARY_SYSTEM_PROMPT = """你是一位资深消费者洞察分析师。你只�
 
 重要规则：
 1. 只使用输入中已有的小红书帖子、证据和链接。不得把样本量当作市场份额，不得编造因果关系、其他平台数据或原文。
-2. Raw 评分纳入全部证据；Trust-aware 评分应降低高风险证据的影响。分数范围 0–100，0=评价极负面、50=中性、100=评价极正面；它反映评价情感倾向，不是商品客观质量分。
+2. Raw 评分纳入全部证据；Trust-aware 评分应降低高风险证据的影响。raw、trust_aware、analysis_confidence 均使用 0–100 数值范围；analysis_confidence=90 表示 90% 置信度，不要输出 0.9。情感分数中 0=评价极负面、50=中性、100=评价极正面；它反映评价情感倾向，不是商品客观质量分。
 3. 风险分数表示内容需要谨慎参考，不代表评论一定虚假。不得把营销表达或上下文不足说成造假。
-4. 每个影响结论的字段都要用 evidence_ids 关联到输入的 evidence_items。证据详情中的 quote、context、链接必须忠实保留输入；若证据不足，返回空数组和“数据不足”。
+4. purchase_reference、aspects、recommended_sources 中的 evidence_ids 只能逐字符复制输入“合法证据目录”里的 evidence_id。禁止创建、改名、缩写 ID，禁止添加帖子序号或其他后缀。若证据不足，evidence_ids 返回空数组，相应结论写“数据不足”。证据详情由后端根据 ID 生成，你不要输出 evidence_details。recommended_sources.relevance 使用 0–1 范围。
 5. 所有 source、recommended_sources 与 evidence_details 的 platform 固定为 xiaohongshu。不要输出平台对比、缺失平台或平台分歧；跨平台聚合由其他服务负责。
 6. 当前 Raw/Trust-aware 切换状态是前端状态，模型只提供 recommended_default_mode，不声称知道用户当前选择。
 7. 输出严格 JSON，不要 Markdown，不要额外字段。
@@ -64,7 +64,6 @@ SUMMARY_SYSTEM_PROMPT = """你是一位资深消费者洞察分析师。你只�
   "aspects": [{"name": "string", "trust_aware_score": 0, "mention_count": 0, "positive_ratio": 0, "neutral_ratio": 0, "negative_ratio": 0, "evidence_ids": ["string"]}],
   "risk_overview": {"high_risk_content_count": 0, "high_risk_content_ratio": 0, "reason_distribution": [{"reason": "string", "count": 0}], "caution": "风险分数表示内容需要谨慎参考，不代表评论一定虚假。"},
   "recommended_sources": [{"post_id": "string", "platform": "string", "title": "string", "publish_time": "string|未提供", "relevance": 0, "risk_score": 0, "url": "string", "evidence_ids": ["string"]}],
-  "evidence_details": [{"evidence_id": "string", "post_id": "string", "platform": "string", "title": "string", "quote": "string", "context": "string", "publish_time": "string|未提供", "sentiment": "positive|neutral|negative|mixed|unknown", "risk_level": "low|medium|high", "risk_score": 0, "url": "string"}],
   "limitations": ["string"]
 }"""
 
@@ -103,9 +102,15 @@ def build_post_prompt(product_name: str, post: dict) -> str:
 请基于上一轮图片观察和本轮文字证据，按约定 JSON 结构分析这条帖子。"""
 
 
-def build_summary_prompt(product_name: str, analyses: list[dict]) -> str:
+def build_summary_prompt(
+    product_name: str,
+    analyses: list[dict],
+    evidence_catalog: dict[str, dict],
+) -> str:
     return (
         f"目标产品：{product_name}\n"
         "以下是逐帖分析结果，请据此生成产品洞察汇总：\n"
         + json.dumps(analyses, ensure_ascii=False)
+        + "\n合法证据目录（所有 evidence_ids 只能从这些键中原样选择）：\n"
+        + json.dumps(evidence_catalog, ensure_ascii=False)
     )

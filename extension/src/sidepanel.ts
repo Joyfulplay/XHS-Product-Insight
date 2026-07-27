@@ -486,8 +486,7 @@ function render(): void {
         </div>
       </section>
 
-      <div class="category-banner"><strong>${USE_MOCK ? "试运行模式" : "真实采集模式"}</strong><span>${USE_MOCK ? "当前使用 Mock 数据完成 dry run。" : "当前插件已连接本地 FastAPI，并通过 /api/v1/xhs/collections 获取真实采集与分析结果。"}</span></div>
-      <div class="category-banner"><strong>数据范围</strong><span>当前商品信息来自淘宝/天猫，评论分析数据仅来自小红书。</span></div>
+      ${USE_MOCK ? `<div class="category-banner"><strong>试运行模式</strong><span>当前使用 Mock 数据完成 dry run。</span></div>` : ""}
       ${renderCollectionFlow(state.collection, pageProduct, state.preferences, USE_MOCK)}
       ${USE_MOCK ? `<div class="demo-banner"><strong>Mock 小红书数据</strong><span>当前分析结果为小红书笔记与评论 Mock 数据，不代表当前页面商品的真实分析。</span></div>` : ""}
       ${renderDemoSwitcher()}
