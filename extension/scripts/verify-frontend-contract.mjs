@@ -139,9 +139,23 @@ const schema11Result = {
     usage_scenarios: ["通勤"],
     user_types: ["通勤用户"],
     unsuitable_users: ["预算敏感用户"],
-    pros: ["降噪稳定"],
-    cons: ["价格较高"],
+    pros: ["旧版优点字段"],
+    cons: ["旧版缺点字段"],
     purchase_advice: "适合重视降噪的用户。",
+  },
+  pros: ["降噪表现稳定。", "佩戴体验舒适。", "续航满足日常使用。"],
+  cons: ["产品价格较高。", "长时间佩戴可能闷热。", "部分场景证据不足。"],
+  purchase_reference: {
+    trust_aware_one_liner: "可信结论",
+    raw_one_liner: "原始结论",
+    recommended_default_mode: "trust_aware",
+    reasons_for_difference: ["高风险内容被降权"],
+    evidence_ids: ["e1"],
+  },
+  sample_overview: {
+    posts_analyzed: 10,
+    comment_count: 53,
+    coverage_note: "样本仅覆盖小红书。",
   },
   sentiment_scores: {
     raw: 82,
@@ -155,6 +169,46 @@ const schema11Result = {
     reason_distribution: [{ reason: "营销式表达", count: 3 }],
     caution: "风险分数表示内容需要谨慎参考，不代表评论一定虚假。",
   },
+  platform: {
+    name: "xiaohongshu",
+    content_count: 10,
+    raw_score: 82,
+    trust_aware_score: 76,
+    high_risk_content_ratio: 0.3,
+  },
+  aspects: [{
+    name: "降噪",
+    trust_aware_score: 80,
+    mention_count: 6,
+    positive_ratio: 0.7,
+    neutral_ratio: 0.2,
+    negative_ratio: 0.1,
+    evidence_ids: ["e1"],
+  }],
+  recommended_sources: [{
+    post_id: "note-1",
+    platform: "xiaohongshu",
+    title: "推荐阅读",
+    publish_time: "2026-07-20",
+    relevance: 0.95,
+    risk_score: 10,
+    url: "https://www.xiaohongshu.com/explore/note-1",
+    evidence_ids: ["e1"],
+  }],
+  evidence_details: [{
+    evidence_id: "e1",
+    post_id: "note-1",
+    platform: "xiaohongshu",
+    title: "真实体验",
+    quote: "降噪表现稳定",
+    context: "通勤使用",
+    publish_time: "2026-07-20",
+    sentiment: "positive",
+    risk_level: "low",
+    risk_score: 10,
+    url: "https://www.xiaohongshu.com/explore/note-1",
+  }],
+  limitations: ["样本规模有限。"],
   statistics: {
     keywords: [{ text: "降噪", count: 12, weight: 1 }],
     sentiment_distribution: { positive: 0.6, neutral: 0.3, negative: 0.1 },
@@ -193,6 +247,33 @@ if (normalizedSchema11.high_risk_count !== 3 || normalizedSchema11.risk_reasons[
 }
 if (normalizedSchema11.risk_caution !== "风险分数表示内容需要谨慎参考，不代表评论一定虚假。") {
   throw new Error("schema 1.1 LLM risk caution mapping failed");
+}
+if (normalizedSchema11.strengths.length !== 3 || normalizedSchema11.strengths[0] !== "降噪表现稳定。") {
+  throw new Error("schema 1.1 product pros mapping failed");
+}
+if (normalizedSchema11.weaknesses.length !== 3 || normalizedSchema11.weaknesses[2] !== "部分场景证据不足。") {
+  throw new Error("schema 1.1 product cons mapping failed");
+}
+if (normalizedSchema11.llm_summary?.purchase_reference?.raw_one_liner !== "原始结论") {
+  throw new Error("schema 1.1 purchase reference mapping failed");
+}
+if (normalizedSchema11.llm_summary?.sample_overview.coverage_note !== "样本仅覆盖小红书。") {
+  throw new Error("schema 1.1 sample overview mapping failed");
+}
+if (normalizedSchema11.llm_summary?.platform?.content_count !== 10) {
+  throw new Error("schema 1.1 platform metrics mapping failed");
+}
+if (normalizedSchema11.llm_summary?.aspects[0]?.evidence_ids[0] !== "e1") {
+  throw new Error("schema 1.1 aspect evidence mapping failed");
+}
+if (normalizedSchema11.llm_summary?.recommended_sources[0]?.title !== "推荐阅读") {
+  throw new Error("schema 1.1 recommended sources mapping failed");
+}
+if (normalizedSchema11.llm_summary?.evidence_details[0]?.context !== "通勤使用") {
+  throw new Error("schema 1.1 evidence details mapping failed");
+}
+if (normalizedSchema11.llm_summary?.limitations[0] !== "样本规模有限。") {
+  throw new Error("schema 1.1 limitations mapping failed");
 }
 if (normalizedSchema11.keywords[0] !== "降噪") {
   throw new Error("schema 1.1 statistics.keywords mapping failed");

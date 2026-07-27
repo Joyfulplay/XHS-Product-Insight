@@ -6,7 +6,7 @@ These models validate the outputs defined in ``prompt.py``.  Scores use the
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, model_validator
 
@@ -15,6 +15,7 @@ Sentiment = Literal["positive", "neutral", "negative", "mixed", "unknown"]
 AspectSentiment = Literal["positive", "neutral", "negative", "mixed"]
 RiskLevel = Literal["low", "medium", "high"]
 SourceType = Literal["post", "comment", "image"]
+StandaloneStatement = Annotated[str, Field(min_length=1)]
 
 
 class OutputModel(BaseModel):
@@ -210,6 +211,16 @@ class XiaohongshuSummaryModelOutput(OutputModel):
     evidence IDs.
     """
 
+    pros: list[StandaloneStatement] = Field(
+        min_length=3,
+        max_length=3,
+        description="恰好三条互不重复、可独立阅读且每条只表达一个优点的完整语句。",
+    )
+    cons: list[StandaloneStatement] = Field(
+        min_length=3,
+        max_length=3,
+        description="恰好三条互不重复、可独立阅读且每条只表达一个缺点的完整语句。",
+    )
     purchase_reference: PurchaseReference
     sample_overview: SampleOverview
     sentiment_scores: SentimentScores
@@ -218,6 +229,17 @@ class XiaohongshuSummaryModelOutput(OutputModel):
     risk_overview: RiskOverview
     recommended_sources: list[RecommendedSource] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def pros_and_cons_must_be_independent(self) -> "XiaohongshuSummaryModelOutput":
+        """Keep each product advantage/disadvantage as one standalone item."""
+
+        for field_name, statements in (("pros", self.pros), ("cons", self.cons)):
+            if len(set(statements)) != 3:
+                raise ValueError(f"{field_name} statements must be unique")
+            if any("\n" in statement or "\r" in statement for statement in statements):
+                raise ValueError(f"{field_name} statements must not contain line breaks")
+        return self
 
     @model_validator(mode="after")
     def evidence_references_must_exist_in_input(

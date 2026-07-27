@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 
 from app.services.analysis_pipeline import AnalysisPipelineService
 
@@ -7,6 +8,16 @@ class FakeInsightService:
     def analyze_batch(self, _product_name, _notes):
         return {
             "summary": {
+                "pros": [
+                    "降噪表现获得正面反馈。",
+                    "佩戴体验较为舒适。",
+                    "续航能够满足日常使用。",
+                ],
+                "cons": [
+                    "产品价格相对较高。",
+                    "长时间佩戴可能产生闷热感。",
+                    "部分使用场景的证据不足。",
+                ],
                 "purchase_reference": {
                     "trust_aware_one_liner": "LLM 可信购买建议",
                     "raw_one_liner": "LLM 原始购买建议",
@@ -80,6 +91,17 @@ def sample_dataset():
     }
 
 
+def test_pipeline_initialization_does_not_create_processed_directory(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    pipeline = AnalysisPipelineService()
+
+    assert not (tmp_path / "data" / "processed").exists()
+    assert Path(pipeline.cleaner.image_output_dir) == (
+        Path(__file__).resolve().parents[2] / "data" / "processed" / "image"
+    )
+
+
 def test_analysis_pipeline_builds_frontend_contract(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
@@ -114,6 +136,16 @@ def test_analysis_pipeline_uses_llm_insights_when_available():
     assert result.llm_insights.overall_summary == "LLM 可信购买建议"
     assert result.llm_insights.purchase_advice == "LLM 可信购买建议"
     assert result.llm_insights.product_attributes == ["降噪"]
+    assert result.llm_insights.pros == [
+        "降噪表现获得正面反馈。",
+        "佩戴体验较为舒适。",
+        "续航能够满足日常使用。",
+    ]
+    assert result.llm_insights.cons == [
+        "产品价格相对较高。",
+        "长时间佩戴可能产生闷热感。",
+        "部分使用场景的证据不足。",
+    ]
     assert llm_response is not None
     assert llm_response["summary"]["sentiment_scores"]["trust_aware"] == 76
 
