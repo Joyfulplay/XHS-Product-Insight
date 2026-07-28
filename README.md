@@ -133,6 +133,23 @@ The local FastAPI service provides the extension-facing API, Xiaohongshu collect
 See [USAGE.md](USAGE.md) for virtual-environment setup, direct
 `backend/main.py` startup commands, Xiaohongshu login, and standalone crawler usage.
 
+Before starting the backend, copy the environment-variable template:
+
+```bash
+cp .env.example .env
+```
+
+Then open `.env`, set your OpenAI API key, and keep or change the model as needed:
+
+```env
+OPENAI_API_KEY=your_openai_api_key
+LLM_MODEL=gpt-4.1-mini
+```
+
+`gpt-4.1-mini` is the recommended model for this project. You can also set
+`OPENAI_BASE_URL` in `.env` when using a compatible custom API endpoint. Never
+commit `.env`, because it contains your API credentials.
+
 For Windows users, the easiest way is to double-click:
 
 ```text
